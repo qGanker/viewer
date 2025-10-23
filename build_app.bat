@@ -7,3 +7,4 @@ if %ERRORLEVEL% EQU 0 (
     echo Build failed!
 )
 pause
+

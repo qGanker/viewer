@@ -188,108 +188,134 @@ class AnnotationPainter extends CustomPainter {
   }
 }
 
+// Класс для хранения одной линии линейки
+class RulerLine {
+  final Offset start;
+  final Offset end;
+  final double pixelSpacing;
+  
+  RulerLine({required this.start, required this.end, required this.pixelSpacing});
+  
+  double get distance {
+    return (end - start).distance;
+  }
+  
+  double get realDistanceMm {
+    return distance * pixelSpacing;
+  }
+}
+
 // Класс для рисования линейки
 class RulerPainter extends CustomPainter {
-  final List<Offset> points;
+  final List<Offset> currentPoints; // Текущие точки для рисования
+  final List<RulerLine> completedLines; // Завершенные линии
   final double pixelSpacing;
-  RulerPainter({required this.points, required this.pixelSpacing});
+  
+  RulerPainter({
+    required this.currentPoints, 
+    required this.completedLines,
+    required this.pixelSpacing
+  });
   @override
   void paint(Canvas canvas, Size size) {
     try {
       final paint = Paint()..color = Colors.yellow..strokeWidth = 2..style = PaintingStyle.stroke;
       final fillPaint = Paint()..color = Colors.yellow..style = PaintingStyle.fill;
       
-      if (points.isEmpty) return;
-      
       // Проверяем корректность pixelSpacing
       final safePixelSpacing = pixelSpacing.isFinite && pixelSpacing > 0 ? pixelSpacing : 1.0;
     
-    // Рисуем точки
-    for (var point in points) { 
-      canvas.drawCircle(point, 6, fillPaint);
-      canvas.drawCircle(point, 6, paint..color = Colors.black);
-    }
-    
-    // Рисуем линию и измерения
-    if (points.length > 1) {
-      // Основная линия
-      canvas.drawLine(points[0], points[1], paint..strokeWidth = 3);
-      
-      // Перпендикулярные линии на концах для точности
-      final dx = points[1].dx - points[0].dx;
-      final dy = points[1].dy - points[0].dy;
-      final length = sqrt(dx * dx + dy * dy);
-      
-      if (length > 0) {
-        // Нормализованный перпендикулярный вектор
-        final perpX = -dy / length * 10;
-        final perpY = dx / length * 10;
-        
-        // Рисуем перпендикулярные линии
-        canvas.drawLine(
-          Offset(points[0].dx - perpX, points[0].dy - perpY),
-          Offset(points[0].dx + perpX, points[0].dy + perpY),
-          paint..strokeWidth = 2
-        );
-        canvas.drawLine(
-          Offset(points[1].dx - perpX, points[1].dy - perpY),
-          Offset(points[1].dx + perpX, points[1].dy + perpY),
-          paint..strokeWidth = 2
-        );
+      // Рисуем все завершенные линии
+      for (int i = 0; i < completedLines.length; i++) {
+        final line = completedLines[i];
+        _drawRulerLine(canvas, line.start, line.end, safePixelSpacing, paint, fillPaint, i + 1);
       }
       
-      // Вычисляем расстояние
-      final pixelDistance = (points[1] - points[0]).distance;
-      final realDistanceMm = pixelDistance * safePixelSpacing;
-      
-      // Рисуем текст с расстоянием
-      final textPainter = TextPainter(
-        text: TextSpan(
-          text: '${realDistanceMm.toStringAsFixed(2)} mm\n(${pixelDistance.toStringAsFixed(1)} px)',
-          style: const TextStyle(
-            color: Colors.yellow,
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            backgroundColor: Colors.black87
-          )
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      
-      // Позиционируем текст
-      final textOffset = Offset(
-        (points[0].dx + points[1].dx) / 2 + 15, 
-        (points[0].dy + points[1].dy) / 2 - textPainter.height / 2
-      );
-      
-      // Рисуем фон для текста
-      final bgRect = Rect.fromLTWH(
-        textOffset.dx - 5,
-        textOffset.dy - 2,
-        textPainter.width + 10,
-        textPainter.height + 4
-      );
-      canvas.drawRect(bgRect, Paint()..color = Colors.black87);
-      
-      textPainter.paint(canvas, textOffset);
-    }
+      // Рисуем текущие точки и линию (если есть)
+      if (currentPoints.isNotEmpty) {
+        // Рисуем точки
+        for (var point in currentPoints) { 
+          canvas.drawCircle(point, 6, fillPaint);
+          canvas.drawCircle(point, 6, paint..color = Colors.black);
+        }
+        
+        // Рисуем линию и измерения
+        if (currentPoints.length > 1) {
+          _drawRulerLine(canvas, currentPoints[0], currentPoints[1], safePixelSpacing, paint, fillPaint, completedLines.length + 1);
+        }
+      }
     } catch (e) {
       print("Ошибка в RulerPainter: $e");
       // В случае ошибки просто не рисуем ничего
     }
   }
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    if (oldDelegate is! RulerPainter) return true;
+  
+  void _drawRulerLine(Canvas canvas, Offset start, Offset end, double safePixelSpacing, Paint paint, Paint fillPaint, int lineNumber) {
+    // Основная линия
+    canvas.drawLine(start, end, paint..strokeWidth = 3);
     
-    // Проверяем изменения в точках линейки
-    if (points.length != oldDelegate.points.length) return true;
+    // Перпендикулярные линии на концах для точности
+    final dx = end.dx - start.dx;
+    final dy = end.dy - start.dy;
+    final length = sqrt(dx * dx + dy * dy);
     
-    for (int i = 0; i < points.length; i++) {
-      if (points[i] != oldDelegate.points[i]) return true;
+    if (length > 0) {
+      // Нормализованный перпендикулярный вектор
+      final perpX = -dy / length * 10;
+      final perpY = dx / length * 10;
+      
+      // Рисуем перпендикулярные линии
+      canvas.drawLine(
+        Offset(start.dx - perpX, start.dy - perpY),
+        Offset(start.dx + perpX, start.dy + perpY),
+        paint..strokeWidth = 2
+      );
+      canvas.drawLine(
+        Offset(end.dx - perpX, end.dy - perpY),
+        Offset(end.dx + perpX, end.dy + perpY),
+        paint..strokeWidth = 2
+      );
     }
     
-    return pixelSpacing != oldDelegate.pixelSpacing;
+    // Вычисляем расстояние
+    final pixelDistance = (end - start).distance;
+    final realDistanceMm = pixelDistance * safePixelSpacing;
+    
+    // Рисуем текст с расстоянием и номером линии
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: 'L$lineNumber: ${realDistanceMm.toStringAsFixed(2)} mm\n(${pixelDistance.toStringAsFixed(1)} px)',
+        style: const TextStyle(
+          color: Colors.yellow,
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          backgroundColor: Colors.black87
+        )
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    
+    // Позиционируем текст
+    final textOffset = Offset(
+      (start.dx + end.dx) / 2 + 15, 
+      (start.dy + end.dy) / 2 - textPainter.height / 2
+    );
+    
+    // Рисуем фон для текста
+    final bgRect = Rect.fromLTWH(
+      textOffset.dx - 5,
+      textOffset.dy - 2,
+      textPainter.width + 10,
+      textPainter.height + 4
+    );
+    canvas.drawRect(bgRect, Paint()..color = Colors.black87);
+    
+    textPainter.paint(canvas, textOffset);
+  }
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) {
+    // Для надежности всегда перерисовываем, так как списки могут мутировать по месту
+    return true;
   }
 }
 
@@ -318,7 +344,11 @@ class _HomeScreenState extends State<HomeScreen> {
   String _errorMessage = '';
   ToolMode _currentTool = ToolMode.pan;
 
+  // Линейка: текущие точки (0-1 точка) для активного измерения
   List<Offset> _rulerPoints = [];
+  
+  // Линейка: все завершенные измерения (L1, L2, L3...)
+  List<RulerLine> _completedRulerLines = [];
   double _pixelSpacingRow = 1.0;
   final TransformationController _transformationController = TransformationController();
 
@@ -389,6 +419,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _windowCenter = _initialWC;
       _windowWidth = _initialWW;
       _rulerPoints.clear();
+      _completedRulerLines.clear();
       _textAnnotations.clear();
       _arrowAnnotations.clear();
       _arrowPoints.clear();
@@ -420,6 +451,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _originalImageBytes = null; // Сбрасываем исходное изображение
       _patientName = null; 
       _rulerPoints = []; 
+      _completedRulerLines = []; // Сбрасываем завершенные линии
       _textAnnotations = []; // Сбрасываем текстовые аннотации
       _arrowAnnotations = []; // Сбрасываем стрелки
       _arrowPoints = []; // Сбрасываем точки для стрелок
@@ -557,24 +589,72 @@ class _HomeScreenState extends State<HomeScreen> {
 
 
   void _handleTap(TapDownDetails details) {
-    // Используем кэшированную матрицу для производительности
+    // Получаем координаты клика в системе изображения
     if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
       _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
       _matrixCacheValid = true;
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
     
-    if (_currentTool == ToolMode.ruler) {
-      setState(() {
-        if (_rulerPoints.length >= 2) _rulerPoints.clear();
-        _rulerPoints.add(sceneOffset);
-        
-        // Если это вторая точка линейки, добавляем в историю
-        if (_rulerPoints.length == 2) {
+    // Обрабатываем клик только если активен инструмент линейки
+    if (_currentTool != ToolMode.ruler) return;
+
+    // Определяем, зажат ли Ctrl в момент клика
+    final bool ctrlPressed = RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlLeft) ||
+                             RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlRight);
+
+    setState(() {
+      if (ctrlPressed) {
+        // Режим добавления сегментов при зажатом Ctrl
+        if (_rulerPoints.length == 1) {
+          // Завершаем текущую линию из точки-анкера в новую точку
+          final completedLine = RulerLine(
+            start: _rulerPoints[0],
+            end: sceneOffset,
+            pixelSpacing: _pixelSpacingRow,
+          );
+          _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
           _addToHistory(ActionType.rulerAdded, null);
+          print("Линейка: добавлен сегмент Ctrl из анкера -> новая точка");
+          // Очищаем анкер после завершения сегмента
+          _rulerPoints = [];
+        } else if (_rulerPoints.isEmpty) {
+          // Нет ни точек, ни линий — ставим первую точку-анкер
+          _rulerPoints.add(sceneOffset);
+          print("Линейка: установлен анкер (Ctrl) в пустом состоянии");
+        } else if (_rulerPoints.length >= 2) {
+          // Если по какой-то причине осталось 2 точки, сбрасываем к одному анкеру
+          _rulerPoints = [sceneOffset];
         }
-      });
-    }
+      } else {
+        // Режим без Ctrl: если была линия — удалить её и начать новую точку
+        if (_completedRulerLines.isNotEmpty) {
+          _completedRulerLines = [];
+          print("Линейка: без Ctrl — удалены все старые линии");
+        }
+
+        // Обычная логика построения: две клики создают линию
+        if (_rulerPoints.length == 0) {
+          _rulerPoints.add(sceneOffset);
+          print("Линейка: добавлена первая точка");
+        } else if (_rulerPoints.length == 1) {
+          // Завершаем линию
+          final completedLine = RulerLine(
+            start: _rulerPoints[0],
+            end: sceneOffset,
+            pixelSpacing: _pixelSpacingRow,
+          );
+          _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
+          _addToHistory(ActionType.rulerAdded, null);
+          print("Линейка: завершено измерение без Ctrl");
+          // Очищаем точки для следующего измерения
+          _rulerPoints = [];
+        } else {
+          // Если было больше 1 точки (неожиданно), начинаем заново
+          _rulerPoints = [sceneOffset];
+        }
+      }
+    });
   }
 
   void _handleTapUp(TapUpDetails details) {
@@ -778,9 +858,9 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       switch (lastAction.type) {
         case ActionType.rulerAdded:
-          // Удаляем последние точки линейки
-          if (_rulerPoints.length >= 2) {
-            _rulerPoints.removeRange(_rulerPoints.length - 2, _rulerPoints.length);
+          // Удаляем последнее завершенное измерение
+          if (_completedRulerLines.isNotEmpty) {
+            _completedRulerLines.removeLast();
           }
           break;
         case ActionType.textAdded:
@@ -1060,7 +1140,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                   }
                                 ),
                                 const SizedBox(height: 15),
-                                IconButton(icon: const Icon(Icons.square_foot), color: _currentTool == ToolMode.ruler ? Colors.lightBlueAccent : Colors.white, onPressed: () => setState(() { _currentTool = ToolMode.ruler; })),
+                                IconButton(
+                                  icon: const Icon(Icons.square_foot), 
+                                  color: _currentTool == ToolMode.ruler ? Colors.lightBlueAccent : Colors.white, 
+                                  onPressed: () => setState(() { 
+                                    _currentTool = ToolMode.ruler; 
+                                    _rulerPoints.clear(); // Очищаем текущие точки при переключении
+                                  })
+                                ),
                                 const SizedBox(height: 15),
                                 IconButton(
                                   icon: const Icon(Icons.rotate_90_degrees_cw), 
@@ -1111,6 +1198,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       _windowCenter = _initialWC;
                                       _windowWidth = _initialWW;
                                       _rulerPoints.clear();
+                                      _completedRulerLines.clear(); // Очищаем завершенные линии
                                       _textAnnotations.clear(); // Очищаем аннотации
                                       _arrowAnnotations.clear(); // Очищаем стрелки
                                       _arrowPoints.clear(); // Очищаем точки стрелок
@@ -1169,11 +1257,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ],
                                   ),
                                 ),
-                                if (_currentTool == ToolMode.annotation) ...[
-                                  const SizedBox(height: 10),
-                                  const Text("📝 Аннотации:\nКликните на изображение и выберите тип аннотации\n(Текст или Стрелка)", style: TextStyle(color: Colors.grey, fontSize: 12), textAlign: TextAlign.center),
-                                  const SizedBox(height: 10),
-                                ],
                                         Expanded(
                                           child: Listener(
                                             onPointerSignal: (PointerSignalEvent event) {
@@ -1252,7 +1335,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                                       ),
                                                   ),
                                                   CustomPaint(
-                                                    painter: RulerPainter(points: _rulerPoints, pixelSpacing: _pixelSpacingRow),
+                                                    painter: RulerPainter(
+                                                      currentPoints: List.of(_rulerPoints), 
+                                                      completedLines: List.of(_completedRulerLines),
+                                                      pixelSpacing: _pixelSpacingRow
+                                                    ),
                                                     child: Container(), // Пустой контейнер для предотвращения ошибок
                                                   ),
                                                   CustomPaint(
