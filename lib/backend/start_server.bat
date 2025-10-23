@@ -1,0 +1,9 @@
+@echo off
+echo Запуск DICOM Viewer Backend Server...
+echo Установка зависимостей...
+pip install fastapi uvicorn pydicom pillow numpy
+
+echo Запуск сервера...
+python main.py
+
+pause
