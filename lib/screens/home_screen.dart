@@ -1224,7 +1224,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           style: const TextStyle(color: Colors.white, fontSize: 16)),
                                       if (_currentTool == ToolMode.brightness) ...[
                                         const SizedBox(height: 10),
-                                        const Text("💡 Яркость: используйте слайдер ниже или колёсико мыши", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                                        
                                         const SizedBox(height: 10),
                                         Row(
                                           mainAxisSize: MainAxisSize.min,
