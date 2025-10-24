@@ -10,7 +10,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'settings_screen.dart';
 import '../services/hotkey_service.dart';
+import '../services/embedded_server_service.dart';
 import '../utils/keyboard_utils.dart';
+import '../widgets/windows_menu_bar.dart';
 
 // Перечисление для инструментов
 enum ToolMode { pan, ruler, rotate, brightness, invert, annotation }
@@ -387,10 +389,63 @@ class _HomeScreenState extends State<HomeScreen> {
   // Сохраняем исходное изображение для сброса
   Uint8List? _originalImageBytes;
 
+  // Создаем меню-бар
+  List<MenuTab> get _menuTabs => [
+    MenuTab(
+      name: 'File',
+      items: [
+        MenuItem(
+          name: 'Open File',
+          icon: Icons.folder_open,
+          shortcut: 'Ctrl+O',
+        ),
+        MenuItem(name: '-'), // Разделитель
+        MenuItem(
+          name: 'Exit',
+          icon: Icons.exit_to_app,
+          shortcut: 'Alt+F4',
+        ),
+      ],
+    ),
+  ];
+
+  // Обработчик выбора пунктов меню
+  void _onMenuItemSelected(String tabName, String itemName) {
+    switch (tabName) {
+      case 'File':
+        switch (itemName) {
+          case 'Open File':
+            _openAndProcessFile();
+            break;
+          case 'Exit':
+            SystemNavigator.pop();
+            break;
+        }
+        break;
+    }
+  }
+
+  // Централизованный метод для переключения инструментов
+  void _switchTool(ToolMode newTool) {
+    setState(() {
+      // Очищаем все состояния инструментов
+      _rulerPoints.clear();
+      _arrowPoints.clear();
+      _isDragging = false;
+      _lastTapPosition = null;
+      
+      // Переключаем инструмент
+      _currentTool = newTool;
+      
+      print('Инструмент переключен на: $newTool');
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     _initializeHotkeys();
+    _initializeEmbeddedServer();
     
     // Откладываем инициализацию кэша матрицы до первого использования
     _matrixCacheValid = false;
@@ -403,6 +458,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _initializeHotkeys() async {
     await HotkeyService.initialize();
+  }
+
+  Future<void> _initializeEmbeddedServer() async {
+    print('Инициализация встроенного сервера...');
+    final success = await EmbeddedServerService.startServer();
+    if (success) {
+      print('Встроенный сервер успешно запущен');
+    } else {
+      print('Ошибка запуска встроенного сервера');
+      setState(() {
+        _errorMessage = 'Не удалось запустить встроенный сервер. Убедитесь, что Python установлен.';
+      });
+    }
   }
 
   void _resetAllSettings() {
@@ -480,24 +548,16 @@ class _HomeScreenState extends State<HomeScreen> {
           return;
         }
         
-        // Проверяем доступность сервера
-        try {
-          final healthCheck = await http.get(Uri.parse('http://127.0.0.1:8000/')).timeout(
-            const Duration(seconds: 5),
-            onTimeout: () {
-              throw Exception('Сервер недоступен (таймаут 5 секунд)');
-            },
-          );
-          print("Сервер доступен, статус: ${healthCheck.statusCode}");
-        } catch (healthError) {
+        // Проверяем доступность встроенного сервера
+        if (!EmbeddedServerService.isRunning) {
           setState(() { 
-            _errorMessage = 'Сервер недоступен. Убедитесь, что backend запущен на http://127.0.0.1:8000\n\nОшибка: $healthError'; 
+            _errorMessage = 'Встроенный сервер не запущен. Попробуйте перезапустить приложение.'; 
             _isLoading = false; 
           });
           return;
         }
         
-        var request = http.MultipartRequest('POST', Uri.parse('http://127.0.0.1:8000/process_dicom/'));
+        var request = http.MultipartRequest('POST', Uri.parse('${EmbeddedServerService.serverUrl}/process_dicom/'));
         request.files.add(http.MultipartFile.fromBytes('file', result.files.single.bytes!, filename: result.files.single.name));
         
         print("Отправляем запрос на сервер...");
@@ -905,7 +965,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _isUpdatingWL = true);
     
     // Используем обычный W/L эндпоинт без яркости
-    final url = Uri.parse('http://127.0.0.1:8000/update_wl/');
+    final url = Uri.parse('${EmbeddedServerService.serverUrl}/update_wl/');
     final headers = {"Content-Type": "application/json"};
     final body = jsonEncode({
       "window_center": center, 
@@ -929,6 +989,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _debounce?.cancel();
     _transformationController.dispose();
+    EmbeddedServerService.stopServer();
     super.dispose();
   }
 
@@ -1007,23 +1068,23 @@ class _HomeScreenState extends State<HomeScreen> {
             print('✓ PAN hotkey matched');
             toolChanged = true;
             toolName = 'Панорамирование';
-            setState(() => _currentTool = ToolMode.pan);
+            _switchTool(ToolMode.pan);
           } else if (HotkeyService.isKeyForTool(keyString, 'ruler', ctrl: ctrlPressed, alt: altPressed, shift: shiftPressed)) {
             print('✓ RULER hotkey matched');
             toolChanged = true;
             toolName = 'Линейка';
-            setState(() => _currentTool = ToolMode.ruler);
+            _switchTool(ToolMode.ruler);
           } else if (HotkeyService.isKeyForTool(keyString, 'brightness', ctrl: ctrlPressed, alt: altPressed, shift: shiftPressed)) {
             print('✓ BRIGHTNESS hotkey matched');
             toolChanged = true;
             toolName = 'Яркость';
-            setState(() => _currentTool = ToolMode.brightness);
+            _switchTool(ToolMode.brightness);
           } else if (HotkeyService.isKeyForTool(keyString, 'invert', ctrl: ctrlPressed, alt: altPressed, shift: shiftPressed)) {
             print('✓ INVERT hotkey matched');
             toolChanged = true;
             toolName = 'Инверсия';
             setState(() {
-              _currentTool = ToolMode.invert;
+              _switchTool(ToolMode.invert);
               _isInverted = !_isInverted;
               _addToHistory(ActionType.inverted, !_isInverted);
             });
@@ -1032,7 +1093,7 @@ class _HomeScreenState extends State<HomeScreen> {
             toolChanged = true;
             toolName = 'Поворот';
             setState(() {
-              _currentTool = ToolMode.rotate;
+              _switchTool(ToolMode.rotate);
               _addToHistory(ActionType.rotated, _rotationAngle);
               _rotationAngle += 90.0;
               if (_rotationAngle >= 360.0) _rotationAngle = 0.0;
@@ -1041,7 +1102,7 @@ class _HomeScreenState extends State<HomeScreen> {
             print('✓ ANNOTATION hotkey matched');
             toolChanged = true;
             toolName = 'Аннотации';
-            setState(() => _currentTool = ToolMode.annotation);
+            _switchTool(ToolMode.annotation);
           } else if (HotkeyService.isKeyForTool(keyString, 'undo', ctrl: ctrlPressed, alt: altPressed, shift: shiftPressed)) {
             print('✓ UNDO hotkey matched');
             _undoLastAction();
@@ -1060,26 +1121,39 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       },
       child: Scaffold(
-      appBar: AppBar(
-        title: const Text('DICOM Viewer'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SettingsScreen()),
-              );
-              // Перезагружаем настройки после возврата из экрана настроек
-              await HotkeyService.reloadSettings();
-              print('Настройки перезагружены: ${HotkeyService.hotkeySettings.toJson()}');
-            },
-            tooltip: 'Настройки',
-          ),
-        ],
-      ),
       backgroundColor: Colors.black,
-      body: Center(
+      body: Column(
+        children: [
+          // Меню-бар в стиле Windows
+          WindowsMenuBar(
+            tabs: _menuTabs,
+            onMenuItemSelected: _onMenuItemSelected,
+          ),
+          // Основной AppBar
+          AppBar(
+            title: const Text('DICOM Viewer'),
+            backgroundColor: const Color(0xFFF0F0F0),
+            foregroundColor: Colors.black87,
+            elevation: 0,
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.settings),
+                onPressed: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                  );
+                  // Перезагружаем настройки после возврата из экрана настроек
+                  await HotkeyService.reloadSettings();
+                  print('Настройки перезагружены: ${HotkeyService.hotkeySettings.toJson()}');
+                },
+                tooltip: 'Настройки',
+              ),
+            ],
+          ),
+          // Основное содержимое
+          Expanded(
+            child: Center(
         child: _isLoading
             ? Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -1120,10 +1194,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 IconButton(
                                   icon: const Icon(Icons.pan_tool), 
                                   color: _currentTool == ToolMode.pan ? Colors.lightBlueAccent : Colors.white, 
-                                  onPressed: () => setState(() { 
-                                    _currentTool = ToolMode.pan; 
-                                    _rulerPoints.clear(); 
-                                  })
+                                  onPressed: () => _switchTool(ToolMode.pan)
                                 ),
                                 const SizedBox(height: 15),
                                 IconButton(
@@ -1131,8 +1202,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   color: _currentTool == ToolMode.invert ? Colors.lightBlueAccent : (_isInverted ? Colors.orange : Colors.white), 
                                   onPressed: () {
                                     setState(() { 
-                                      _currentTool = ToolMode.invert; 
-                                      _rulerPoints.clear();
+                                      _switchTool(ToolMode.invert);
                                       // Сохраняем предыдущее состояние в историю
                                       _addToHistory(ActionType.inverted, _isInverted);
                                       _isInverted = !_isInverted; // Переключаем инверсию
@@ -1143,10 +1213,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 IconButton(
                                   icon: const Icon(Icons.square_foot), 
                                   color: _currentTool == ToolMode.ruler ? Colors.lightBlueAccent : Colors.white, 
-                                  onPressed: () => setState(() { 
-                                    _currentTool = ToolMode.ruler; 
-                                    _rulerPoints.clear(); // Очищаем текущие точки при переключении
-                                  })
+                                  onPressed: () => _switchTool(ToolMode.ruler)
                                 ),
                                 const SizedBox(height: 15),
                                 IconButton(
@@ -1154,8 +1221,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   color: _currentTool == ToolMode.rotate ? Colors.lightBlueAccent : (_rotationAngle != 0.0 ? Colors.orange : Colors.white), 
                                   onPressed: () {
                                     setState(() { 
-                                      _currentTool = ToolMode.rotate; 
-                                      _rulerPoints.clear();
+                                      _switchTool(ToolMode.rotate);
                                       // Сохраняем предыдущий угол в историю
                                       _addToHistory(ActionType.rotated, _rotationAngle);
                                       _rotationAngle += 90.0; // Поворачиваем на 90 градусов
@@ -1164,9 +1230,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                   }
                                 ),
                                 const SizedBox(height: 15),
-                                IconButton(icon: const Icon(Icons.brightness_7), color: _currentTool == ToolMode.brightness ? Colors.lightBlueAccent : Colors.white, onPressed: () => setState(() { _currentTool = ToolMode.brightness; _rulerPoints.clear(); })),
+                                IconButton(
+                                  icon: const Icon(Icons.brightness_7), 
+                                  color: _currentTool == ToolMode.brightness ? Colors.lightBlueAccent : Colors.white, 
+                                  onPressed: () => _switchTool(ToolMode.brightness)
+                                ),
                                 const SizedBox(height: 15),
-                                IconButton(icon: const Icon(Icons.edit), color: _currentTool == ToolMode.annotation ? Colors.lightBlueAccent : Colors.white, onPressed: () => setState(() { _currentTool = ToolMode.annotation; _rulerPoints.clear(); })),
+                                IconButton(
+                                  icon: const Icon(Icons.edit), 
+                                  color: _currentTool == ToolMode.annotation ? Colors.lightBlueAccent : Colors.white, 
+                                  onPressed: () => _switchTool(ToolMode.annotation)
+                                ),
                                 const SizedBox(height: 15),
                                 // Кнопка отмены
                                 IconButton(
@@ -1359,6 +1433,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         ],
                       )
                     : ElevatedButton.icon(icon: const Icon(Icons.folder_open), label: const Text('Открыть DICOM файл'), onPressed: _openAndProcessFile),
+            ),
+          ),
+        ],
       ),
       ),
     );
