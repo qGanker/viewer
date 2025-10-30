@@ -23,6 +23,78 @@ class WindowLevelRequest(BaseModel):
     window_center: float
     window_width: float
     brightness: float = 1.0
+def _safe_str(value):
+    try:
+        return str(value)
+    except Exception:
+        try:
+            return value.decode('utf-8', errors='ignore')
+        except Exception:
+            return ''
+
+def extract_basic_tags(ds):
+    tags = {}
+    def put(key, attr, default=''):
+        tags[key] = _safe_str(getattr(ds, attr, default))
+    put('PatientName', 'PatientName')
+    put('PatientID', 'PatientID')
+    put('StudyDate', 'StudyDate')
+    put('StudyTime', 'StudyTime')
+    put('Modality', 'Modality')
+    put('StudyDescription', 'StudyDescription')
+    put('SeriesDescription', 'SeriesDescription')
+    put('InstitutionName', 'InstitutionName')
+    put('Manufacturer', 'Manufacturer')
+    put('BodyPartExamined', 'BodyPartExamined')
+    put('StudyInstanceUID', 'StudyInstanceUID')
+    put('SeriesInstanceUID', 'SeriesInstanceUID')
+    put('SOPInstanceUID', 'SOPInstanceUID')
+    tags['Rows'] = _safe_str(getattr(ds, 'Rows', ''))
+    tags['Columns'] = _safe_str(getattr(ds, 'Columns', ''))
+    ps = getattr(ds, 'PixelSpacing', None)
+    if ps is not None:
+        try:
+            tags['PixelSpacing'] = f"{float(ps[0])} \\ {float(ps[1])}"
+        except Exception:
+            tags['PixelSpacing'] = _safe_str(ps)
+    for name in ['SliceThickness', 'KVP', 'ExposureTime', 'XRayTubeCurrent', 'Exposure']:
+        if hasattr(ds, name):
+            tags[name] = _safe_str(getattr(ds, name))
+    return tags
+
+def extract_report(ds):
+    # Пробуем ряд стандартных текстовых полей, где часто встречается заключение
+    for attr in [
+        'ImageComments',
+        'StudyComments',
+        'ClinicalInformation',
+        'AdditionalPatientHistory',
+        'ReasonForRequestedProcedure',
+        'RequestedProcedureDescription',
+        'AdmittingDiagnosesDescription',
+        'DiagnosisDescription',
+    ]:
+        if hasattr(ds, attr):
+            val = _safe_str(getattr(ds, attr))
+            if val:
+                return val
+    try:
+        if hasattr(ds, 'ContentSequence'):
+            items = []
+            def walk(seq):
+                for item in seq:
+                    vt = _safe_str(getattr(item, 'ValueType', ''))
+                    if vt == 'TEXT' and hasattr(item, 'TextValue'):
+                        items.append(_safe_str(item.TextValue))
+                    if hasattr(item, 'ContentSequence'):
+                        walk(item.ContentSequence)
+            walk(ds.ContentSequence)
+            if items:
+                return "\n".join(items)
+    except Exception:
+        pass
+    return ''
+
 
 def render_pixels_to_base64(pixels, photometric_interpretation):
     """Вспомогательная функция, которая рендерит 8-битную картинку."""
@@ -100,6 +172,8 @@ async def process_dicom_file(file: UploadFile = File(...)):
         pixel_spacing = getattr(dicom_file, 'PixelSpacing', [1.0, 1.0])
         
         print("Подготавливаем ответ...")
+        tags = extract_basic_tags(dicom_file)
+        report = extract_report(dicom_file)
         result = {
             "patient_name": str(getattr(dicom_file, 'PatientName', 'N/A')),
             "image_base64": img_base64,
@@ -107,6 +181,8 @@ async def process_dicom_file(file: UploadFile = File(...)):
             "window_width": float(getattr(dicom_file, 'WindowWidth', 400)),
             "pixel_spacing_row": float(pixel_spacing[0]),
             "pixel_spacing_col": float(pixel_spacing[1]),
+            "tags": tags,
+            "report": report,
         }
         
         print(f"Ответ подготовлен. Размер base64: {len(img_base64)} символов")

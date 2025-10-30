@@ -48,29 +48,49 @@ class EmbeddedServerService {
         workingDirectory: serverDir.path,
       );
       
-      // Обработка вывода сервера
-      _serverProcess!.stdout.transform(utf8.decoder).listen((data) {
-        print('Server stdout: $data');
-      });
-      
-      _serverProcess!.stderr.transform(utf8.decoder).listen((data) {
-        print('Server stderr: $data');
-      });
+      // Обработка вывода сервера (устойчиво к невалидной UTF-8)
+      _serverProcess!.stdout
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .listen(
+        (data) {
+          print('Server stdout: $data');
+        },
+        onError: (e, st) {
+          print('Server stdout decode error: $e');
+        },
+        cancelOnError: false,
+      );
+
+      _serverProcess!.stderr
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .listen(
+        (data) {
+          print('Server stderr: $data');
+        },
+        onError: (e, st) {
+          print('Server stderr decode error: $e');
+        },
+        cancelOnError: false,
+      );
       
       // Ждем немного, чтобы сервер запустился
       await Future.delayed(const Duration(seconds: 3));
-      
-      // Проверяем, что сервер запустился
-      if (await _checkServerHealth()) {
-        _isRunning = true;
-        _serverUrl = 'http://127.0.0.1:8000';
-        print('Встроенный сервер успешно запущен на $_serverUrl');
-        return true;
-      } else {
-        print('Ошибка: сервер не отвечает');
-        await stopServer();
-        return false;
+
+      // Пробуем несколько портов (совместимость со старыми скриптами)
+      final candidatePorts = [8000, 8010];
+      for (final port in candidatePorts) {
+        final url = 'http://127.0.0.1:$port';
+        if (await _checkServerHealth(urlOverride: url)) {
+          _isRunning = true;
+          _serverUrl = url;
+          print('Встроенный сервер успешно запущен на $_serverUrl');
+          return true;
+        }
       }
+
+      print('Ошибка: сервер не отвечает');
+      await stopServer();
+      return false;
       
     } catch (e) {
       print('Ошибка запуска встроенного сервера: $e');
@@ -92,10 +112,11 @@ class EmbeddedServerService {
   }
   
   // Проверка здоровья сервера
-  static Future<bool> _checkServerHealth() async {
+  static Future<bool> _checkServerHealth({String? urlOverride}) async {
     try {
       final client = HttpClient();
-      final request = await client.getUrl(Uri.parse('$serverUrl/'));
+      final targetUrl = urlOverride ?? '$serverUrl/';
+      final request = await client.getUrl(Uri.parse('$targetUrl/'));
       final response = await request.close();
       client.close();
       return response.statusCode == 200;
@@ -125,6 +146,82 @@ import io
 
 app = Flask(__name__)
 CORS(app)
+
+def _safe_str(value):
+    try:
+        return str(value)
+    except Exception:
+        try:
+            return value.decode('utf-8', errors='ignore')
+        except Exception:
+            return ''
+
+def extract_basic_tags(ds):
+    tags = {}
+    def put(key, attr, default=''):
+        tags[key] = _safe_str(getattr(ds, attr, default))
+    put('PatientName', 'PatientName')
+    put('PatientID', 'PatientID')
+    put('StudyDate', 'StudyDate')
+    put('StudyTime', 'StudyTime')
+    put('Modality', 'Modality')
+    put('StudyDescription', 'StudyDescription')
+    put('SeriesDescription', 'SeriesDescription')
+    put('InstitutionName', 'InstitutionName')
+    put('Manufacturer', 'Manufacturer')
+    put('BodyPartExamined', 'BodyPartExamined')
+    put('StudyInstanceUID', 'StudyInstanceUID')
+    put('SeriesInstanceUID', 'SeriesInstanceUID')
+    put('SOPInstanceUID', 'SOPInstanceUID')
+    # Dimensions
+    tags['Rows'] = _safe_str(getattr(ds, 'Rows', ''))
+    tags['Columns'] = _safe_str(getattr(ds, 'Columns', ''))
+    # Pixel spacing
+    ps = getattr(ds, 'PixelSpacing', None)
+    if ps is not None:
+        try:
+            tags['PixelSpacing'] = f"{float(ps[0])} \\ {float(ps[1])}"
+        except Exception:
+            tags['PixelSpacing'] = _safe_str(ps)
+    # Additional exposure info
+    for name in ['SliceThickness', 'KVP', 'ExposureTime', 'XRayTubeCurrent', 'Exposure']:
+        if hasattr(ds, name):
+            tags[name] = _safe_str(getattr(ds, name))
+    return tags
+
+def extract_report(ds):
+    # Try common text fields
+    for attr in [
+        'ImageComments',
+        'StudyComments',
+        'ClinicalInformation',
+        'AdditionalPatientHistory',
+        'ReasonForRequestedProcedure',
+        'RequestedProcedureDescription',
+        'AdmittingDiagnosesDescription',
+        'DiagnosisDescription',
+    ]:
+        if hasattr(ds, attr):
+            val = _safe_str(getattr(ds, attr))
+            if val:
+                return val
+    # Very simple SR traversal
+    try:
+        if hasattr(ds, 'ContentSequence'):
+            items = []
+            def walk(seq):
+                for item in seq:
+                    vt = _safe_str(getattr(item, 'ValueType', ''))
+                    if vt == 'TEXT' and hasattr(item, 'TextValue'):
+                        items.append(_safe_str(item.TextValue))
+                    if hasattr(item, 'ContentSequence'):
+                        walk(item.ContentSequence)
+            walk(ds.ContentSequence)
+            if items:
+                return "\n".join(items)
+    except Exception:
+        pass
+    return ''
 
 def process_dicom_file(file_bytes, filename):
     """Обработка DICOM файла"""
@@ -169,10 +266,12 @@ def process_dicom_file(file_bytes, filename):
         image.save(buffer, format='PNG')
         image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
         
-        # Получаем метаданные
+        # Получаем метаданные и теги
         patient_name = str(ds.get('PatientName', 'Unknown'))
         pixel_spacing = ds.get('PixelSpacing', [1.0, 1.0])
         pixel_spacing_row = float(pixel_spacing[0]) if pixel_spacing else 1.0
+        tags = extract_basic_tags(ds)
+        report = extract_report(ds)
         
         # Удаляем временный файл
         os.remove(temp_path)
@@ -182,7 +281,9 @@ def process_dicom_file(file_bytes, filename):
             'patient_name': patient_name,
             'pixel_spacing_row': pixel_spacing_row,
             'window_center': window_center,
-            'window_width': window_width
+            'window_width': window_width,
+            'tags': tags,
+            'report': report,
         }
         
     except Exception as e:

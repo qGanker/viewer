@@ -8,6 +8,8 @@ import 'dart:typed_data';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
 import 'settings_screen.dart';
 import '../services/hotkey_service.dart';
 import '../services/embedded_server_service.dart';
@@ -345,6 +347,14 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = false;
   String _errorMessage = '';
   ToolMode _currentTool = ToolMode.pan;
+  Map<String, String> _dicomTags = {};
+  String? _dicomReport;
+  final ScrollController _tagsScrollController = ScrollController();
+  bool _showInfoPanel = true;
+  bool _editInfo = false;
+  String? _currentFileName;
+  final TextEditingController _reportController = TextEditingController();
+  final Map<String, TextEditingController> _tagControllers = {};
 
   // Линейка: текущие точки (0-1 точка) для активного измерения
   List<Offset> _rulerPoints = [];
@@ -518,6 +528,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _imageBytes = null; 
       _originalImageBytes = null; // Сбрасываем исходное изображение
       _patientName = null; 
+      _dicomTags = {};
+      _dicomReport = null;
       _rulerPoints = []; 
       _completedRulerLines = []; // Сбрасываем завершенные линии
       _textAnnotations = []; // Сбрасываем текстовые аннотации
@@ -538,6 +550,7 @@ class _HomeScreenState extends State<HomeScreen> {
       
       if (result != null && result.files.single.bytes != null) {
         print("Выбран файл: ${result.files.single.name}, размер: ${result.files.single.bytes!.length} байт");
+        _currentFileName = result.files.single.name;
         
         // Проверяем размер файла
         if (result.files.single.bytes!.length > 100 * 1024 * 1024) { // 100MB
@@ -608,6 +621,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 
                 _originalImageBytes = _imageBytes; // Сохраняем исходное изображение
                 _patientName = data['patient_name'];
+                if (data['tags'] is Map) {
+                  _dicomTags = (data['tags'] as Map)
+                      .map((key, value) => MapEntry(key.toString(), value.toString()));
+                }
+                if (data['report'] != null) {
+                  _dicomReport = data['report'].toString();
+                }
+                _reportController.text = _dicomReport ?? '';
+                // Обновляем контроллеры по тегам
+                _tagControllers.clear();
+                _dicomTags.forEach((k, v) {
+                  _tagControllers[k] = TextEditingController(text: v);
+                });
                 _pixelSpacingRow = (data['pixel_spacing_row'] as num).toDouble();
                 _windowCenter = (data['window_center'] as num).toDouble();
                 _windowWidth = (data['window_width'] as num).toDouble();
@@ -985,11 +1011,95 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _saveMetadata() async {
+    try {
+      // Обновляем локальное состояние из контроллеров
+      _dicomReport = _reportController.text.trim();
+      _dicomTags = Map.fromEntries(_dicomTags.keys.map((k) => MapEntry(k, _tagControllers[k]?.text ?? '')));
+
+      final dir = await getApplicationDocumentsDirectory();
+      final metaDir = Directory('${dir.path}/dicom_metadata');
+      if (!await metaDir.exists()) {
+        await metaDir.create(recursive: true);
+      }
+      final baseName = (_currentFileName ?? 'session').replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+      final file = File('${metaDir.path}/$baseName.metadata.json');
+      final data = {
+        'patient_name': _patientName,
+        'report': _dicomReport,
+        'tags': _dicomTags,
+        'window_center': _windowCenter,
+        'window_width': _windowWidth,
+        'pixel_spacing_row': _pixelSpacingRow,
+        'updated_at': DateTime.now().toIso8601String(),
+      };
+      await file.writeAsString(const JsonEncoder.withIndent('  ').convert(data));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Метаданные сохранены'), duration: Duration(milliseconds: 1200)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка сохранения: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  void _showAddTagDialog() {
+    final keyController = TextEditingController();
+    final valueController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Новый тег'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: keyController,
+                decoration: const InputDecoration(labelText: 'Ключ'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: valueController,
+                decoration: const InputDecoration(labelText: 'Значение'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Отмена')),
+            TextButton(
+              onPressed: () {
+                final k = keyController.text.trim();
+                final v = valueController.text.trim();
+                if (k.isNotEmpty) {
+                  setState(() {
+                    _dicomTags[k] = v;
+                    _tagControllers[k]?.dispose();
+                    _tagControllers[k] = TextEditingController(text: v);
+                  });
+                }
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('Добавить'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   void dispose() {
     _debounce?.cancel();
     _transformationController.dispose();
     EmbeddedServerService.stopServer();
+    _reportController.dispose();
+    for (final c in _tagControllers.values) { c.dispose(); }
     super.dispose();
   }
 
@@ -1286,8 +1396,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               ],
                             ),
                           ),
-                          // Область просмотра
-                          Expanded(
+                      // Область просмотра
+                      Expanded(
                             child: Column(
                               children: [
                                 Padding(
@@ -1430,6 +1540,187 @@ class _HomeScreenState extends State<HomeScreen> {
                               ],
                             ),
                           ),
+                          // Тумблер сворачивания/разворачивания панели
+                          Container(
+                            width: 28,
+                            color: const Color(0xFF0C0C0C),
+                            child: Center(
+                              child: IconButton(
+                                iconSize: 18,
+                                padding: EdgeInsets.zero,
+                                tooltip: _showInfoPanel ? 'Скрыть панель' : 'Показать панель',
+                                icon: Icon(_showInfoPanel ? Icons.chevron_right : Icons.chevron_left, color: Colors.white70),
+                                onPressed: () {
+                                  setState(() { _showInfoPanel = !_showInfoPanel; });
+                                },
+                              ),
+                            ),
+                          ),
+                          // Панель с тегами и заключением (можно скрыть)
+                          if (_showInfoPanel)
+                            Container(
+                              width: 320,
+                              color: const Color(0xFF111111),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                    decoration: const BoxDecoration(
+                                      border: Border(bottom: BorderSide(color: Color(0xFF222222), width: 1)),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            _patientName != null ? 'Пациент: '+_patientName! : 'DICOM сведения',
+                                            style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
+                                          ),
+                                        ),
+                                        IconButton(
+                                          icon: Icon(_editInfo ? Icons.check : Icons.edit, size: 16, color: Colors.white70),
+                                          tooltip: _editInfo ? 'Сохранить' : 'Редактировать',
+                                          onPressed: () async {
+                                            if (_editInfo) {
+                                              // Сохранение
+                                              await _saveMetadata();
+                                            }
+                                            setState(() { _editInfo = !_editInfo; });
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const Text('Заключение', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                                        const SizedBox(height: 6),
+                                        _editInfo
+                                          ? TextField(
+                                              controller: _reportController,
+                                              maxLines: 6,
+                                              style: const TextStyle(color: Colors.white, fontSize: 12, height: 1.3),
+                                              decoration: InputDecoration(
+                                                hintText: 'Введите заключение...',
+                                                hintStyle: const TextStyle(color: Color(0xFF7A7A7A), fontSize: 12),
+                                                isDense: true,
+                                                filled: true,
+                                                fillColor: const Color(0xFF1A1A1A),
+                                                border: OutlineInputBorder(borderSide: const BorderSide(color: Color(0xFF2C2C2C)), borderRadius: BorderRadius.circular(4)),
+                                              ),
+                                            )
+                                          : SelectableText(
+                                              (_dicomReport != null && _dicomReport!.trim().isNotEmpty)
+                                                  ? _dicomReport!
+                                                  : 'Не найдено в файле',
+                                              style: TextStyle(
+                                                color: (_dicomReport != null && _dicomReport!.trim().isNotEmpty)
+                                                    ? const Color(0xFFCCCCCC)
+                                                    : const Color(0xFF7A7A7A),
+                                                fontSize: 12,
+                                                height: 1.3,
+                                              ),
+                                            ),
+                                      ],
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Container(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Text('Теги', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                                          const SizedBox(height: 6),
+                                          if (_editInfo)
+                                            Align(
+                                              alignment: Alignment.centerLeft,
+                                              child: TextButton.icon(
+                                                onPressed: _showAddTagDialog,
+                                                icon: const Icon(Icons.add, size: 16),
+                                                label: const Text('Добавить тег'),
+                                              ),
+                                            ),
+                                          Expanded(
+                                            child: Scrollbar(
+                                              controller: _tagsScrollController,
+                                              thumbVisibility: true,
+                                              child: ListView(
+                                                controller: _tagsScrollController,
+                                                children: _dicomTags.entries.map((e) {
+                                                  if (_editInfo) {
+                                                    _tagControllers.putIfAbsent(e.key, () => TextEditingController(text: e.value));
+                                                    return Padding(
+                                                      padding: const EdgeInsets.symmetric(vertical: 4),
+                                                      child: Row(
+                                                        crossAxisAlignment: CrossAxisAlignment.center,
+                                                        children: [
+                                                          SizedBox(
+                                                            width: 130,
+                                                            child: Text(e.key, style: const TextStyle(color: Color(0xFFB0B0B0), fontSize: 12)),
+                                                          ),
+                                                          const SizedBox(width: 8),
+                                                          Expanded(
+                                                            child: TextField(
+                                                              controller: _tagControllers[e.key],
+                                                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                                                              decoration: InputDecoration(
+                                                                isDense: true,
+                                                                filled: true,
+                                                                fillColor: const Color(0xFF1A1A1A),
+                                                                border: OutlineInputBorder(borderSide: const BorderSide(color: Color(0xFF2C2C2C)), borderRadius: BorderRadius.circular(4)),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                          IconButton(
+                                                            icon: const Icon(Icons.close, size: 16, color: Color(0xFF888888)),
+                                                            tooltip: 'Удалить тег',
+                                                            onPressed: () {
+                                                              setState(() {
+                                                                _dicomTags.remove(e.key);
+                                                                _tagControllers.remove(e.key)?.dispose();
+                                                              });
+                                                            },
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    );
+                                                  } else {
+                                                    return Padding(
+                                                      padding: const EdgeInsets.symmetric(vertical: 4),
+                                                      child: Row(
+                                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                                        children: [
+                                                          SizedBox(
+                                                            width: 130,
+                                                            child: Text(e.key, style: const TextStyle(color: Color(0xFFB0B0B0), fontSize: 12)),
+                                                          ),
+                                                          const SizedBox(width: 8),
+                                                          Expanded(
+                                                            child: Text(
+                                                              e.value,
+                                                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                                                              softWrap: true,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    );
+                                                  }
+                                                }).toList(),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                         ],
                       )
                     : ElevatedButton.icon(icon: const Icon(Icons.folder_open), label: const Text('Открыть DICOM файл'), onPressed: _openAndProcessFile),
