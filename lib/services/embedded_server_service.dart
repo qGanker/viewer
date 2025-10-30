@@ -34,12 +34,10 @@ class EmbeddedServerService {
       // Путь к Python скрипту
       final serverScript = File('${serverDir.path}/main.py');
       
-      // Если скрипт не существует, создаем его
-      if (!await serverScript.exists()) {
-        await _createServerFiles(serverDir);
-        // Устанавливаем зависимости Python
-        await _installPythonDependencies(serverDir);
-      }
+      // Всегда обновляем файлы сервера, чтобы гарантировать актуальные эндпоинты (например, /export_dicom/)
+      await _createServerFiles(serverDir);
+      // Устанавливаем зависимости Python (идемпотентно)
+      await _installPythonDependencies(serverDir);
       
       // Запускаем Python сервер
       _serverProcess = await Process.start(
@@ -327,6 +325,51 @@ def update_wl():
         # Для простоты возвращаем успех
         return jsonify({"status": "ok"})
         
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/export_dicom/', methods=['POST'])
+def export_dicom():
+    """Принимает исходный DICOM файл и metadata (tags/report), возвращает изменённый DICOM base64"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({"error": "No file provided"}), 400
+        file = request.files['file']
+        file_bytes = file.read()
+        meta_json = request.form.get('metadata')
+        metadata = json.loads(meta_json) if meta_json else {}
+
+        # Загружаем как DICOM из bytes
+        ds = pydicom.dcmread(io.BytesIO(file_bytes), force=True)
+
+        # Применяем report
+        report = metadata.get('report', None)
+        if report is not None:
+            ds.ImageComments = str(report)
+
+        # Применяем теги по словарю {keyword: value}
+        from pydicom.datadict import tag_for_keyword
+        tags = metadata.get('tags', {}) or {}
+        for key, value in tags.items():
+            try:
+                # Пробуем по ключевому слову DICOM
+                tag = tag_for_keyword(key)
+                if tag is not None:
+                    setattr(ds, key, value)
+                else:
+                    # Если ключ не стандартный keyword — создаём/обновляем как приватный текстовый элемент в (0x0011,0x0010)-подобном стиле не делаем; просто игнорируем
+                    pass
+            except Exception:
+                pass
+
+        # Сохраняем в память новый DICOM
+        out_buf = io.BytesIO()
+        ds.save_as(out_buf, write_like_original=False)
+        out_bytes = out_buf.getvalue()
+        return jsonify({
+            'dicom_base64': base64.b64encode(out_bytes).decode('utf-8'),
+            'size': len(out_bytes)
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

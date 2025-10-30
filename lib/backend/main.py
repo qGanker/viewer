@@ -1,12 +1,15 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
+from typing import Optional
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import pydicom
+import json
 import numpy as np
 import io
 from PIL import Image
 import base64
 from pydicom.pixel_data_handlers.util import apply_voi_lut
+from pydicom.datadict import tag_for_keyword, dictionary_VR
 
 app = FastAPI()
 
@@ -287,6 +290,89 @@ async def update_brightness_only(brightness: float):
     except Exception as e:
         print(f"PYTHON ERROR on brightness update: {e}")
         return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
+
+@app.post("/export_dicom/")
+async def export_dicom(file: UploadFile = File(...), metadata: Optional[str] = Form(None)):
+    """Принимает исходный DICOM и опциональные metadata (tags/report), возвращает изменённый DICOM base64."""
+    try:
+        contents = await file.read()
+        ds = pydicom.dcmread(io.BytesIO(contents), force=True)
+
+        meta = {}
+        if metadata:
+            try:
+                meta = json.loads(metadata)
+            except Exception:
+                meta = {}
+
+        # Применяем текст отчёта, если есть
+        report = meta.get('report') if isinstance(meta, dict) else None
+        if report is not None:
+            try:
+                ds.ImageComments = str(report)
+            except Exception:
+                pass
+
+        # Применяем теги по словарю {keyword: value}
+        # Безопасность: не изменяем структурные пиксельные поля
+        forbidden_keywords = {
+            'Rows', 'Columns', 'BitsAllocated', 'BitsStored', 'HighBit',
+            'SamplesPerPixel', 'PhotometricInterpretation', 'PixelRepresentation',
+            'NumberOfFrames', 'PixelData'
+        }
+
+        def coerce_value_to_vr(v, vr):
+            # Разбираем множественные значения: "a\\b" или "a,b"
+            def split_multi(x):
+                if isinstance(x, str):
+                    if '\\' in x:
+                        return [i for i in x.split('\\') if i != '']
+                    if ',' in x:
+                        return [i for i in x.split(',') if i != '']
+                return x
+
+            v = split_multi(v)
+            def convert_one(x):
+                if vr in ('US', 'UL', 'SS', 'SL'):  # целые
+                    return int(x)
+                if vr in ('FL', 'FD'):  # float
+                    return float(x)
+                if vr == 'IS':  # Integer String
+                    return str(int(x))
+                if vr == 'DS':  # Decimal String
+                    return str(float(x))
+                # Остальные VR — оставляем как есть (строки и т.п.)
+                return x
+
+            if isinstance(v, (list, tuple)):
+                return [convert_one(x) for x in v]
+            return convert_one(v)
+
+        tags = meta.get('tags', {}) if isinstance(meta, dict) else {}
+        if isinstance(tags, dict):
+            for key, value in tags.items():
+                if key in forbidden_keywords:
+                    continue
+                try:
+                    tag = tag_for_keyword(key)
+                    if tag is None:
+                        continue
+                    vr = dictionary_VR(tag) or ''
+                    safe_value = coerce_value_to_vr(value, vr)
+                    setattr(ds, key, safe_value)
+                except Exception:
+                    # Игнорируем неподдерживаемые/некорректные ключи или значения
+                    pass
+
+        out_buf = io.BytesIO()
+        ds.save_as(out_buf, write_like_original=False)
+        out_bytes = out_buf.getvalue()
+        return {
+            'dicom_base64': base64.b64encode(out_bytes).decode('utf-8'),
+            'size': len(out_bytes)
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": str(e)})
 
 if __name__ == "__main__":
     import uvicorn

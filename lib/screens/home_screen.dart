@@ -347,6 +347,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = false;
   String _errorMessage = '';
   ToolMode _currentTool = ToolMode.pan;
+  Uint8List? _originalDicomBytes;
   Map<String, String> _dicomTags = {};
   String? _dicomReport;
   final ScrollController _tagsScrollController = ScrollController();
@@ -551,6 +552,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (result != null && result.files.single.bytes != null) {
         print("Выбран файл: ${result.files.single.name}, размер: ${result.files.single.bytes!.length} байт");
         _currentFileName = result.files.single.name;
+        _originalDicomBytes = result.files.single.bytes;
         
         // Проверяем размер файла
         if (result.files.single.bytes!.length > 100 * 1024 * 1024) { // 100MB
@@ -1093,6 +1095,53 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _exportDicom() async {
+    if (_originalDicomBytes == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Исходный DICOM недоступен для экспорта'), backgroundColor: Colors.red),
+      );
+      return;
+    }
+    try {
+      if (!EmbeddedServerService.isRunning) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Сервер не запущен'), backgroundColor: Colors.red),
+        );
+        return;
+      }
+      var request = http.MultipartRequest('POST', Uri.parse('${EmbeddedServerService.serverUrl}/export_dicom/'));
+      request.files.add(http.MultipartFile.fromBytes('file', _originalDicomBytes!, filename: _currentFileName ?? 'image.dcm'));
+      final meta = jsonEncode({'tags': _dicomTags, 'report': _reportController.text});
+      request.fields['metadata'] = meta;
+      final streamed = await request.send();
+      final body = await streamed.stream.bytesToString();
+      if (streamed.statusCode == 200) {
+        final resp = jsonDecode(body) as Map<String, dynamic>;
+        final base64Str = resp['dicom_base64'] as String;
+        final bytes = base64Decode(base64Str);
+        final dir = await getApplicationDocumentsDirectory();
+        final outDir = Directory('${dir.path}/dicom_exports');
+        if (!await outDir.exists()) await outDir.create(recursive: true);
+        final baseName = (_currentFileName ?? 'image').replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+        final file = File('${outDir.path}/${baseName.replaceAll('.dcm','')}_edited.dcm');
+        await file.writeAsBytes(bytes);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Сохранено: ${file.path}')), 
+          );
+        }
+      } else {
+        throw Exception('HTTP ${streamed.statusCode}: $body');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка экспорта: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   @override
   void dispose() {
     _debounce?.cancel();
@@ -1587,6 +1636,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                             }
                                             setState(() { _editInfo = !_editInfo; });
                                           },
+                                        ),
+                                        const SizedBox(width: 4),
+                                        IconButton(
+                                          icon: const Icon(Icons.download, size: 16, color: Colors.white70),
+                                          tooltip: 'Экспортировать DICOM с правками',
+                                          onPressed: _exportDicom,
                                         ),
                                       ],
                                     ),
