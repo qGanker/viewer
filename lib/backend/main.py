@@ -6,7 +6,8 @@ import pydicom
 import json
 import numpy as np
 import io
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
+from pydicom.uid import ExplicitVRLittleEndian
 import base64
 from pydicom.pixel_data_handlers.util import apply_voi_lut
 from pydicom.datadict import tag_for_keyword, dictionary_VR
@@ -292,7 +293,12 @@ async def update_brightness_only(brightness: float):
         return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
 
 @app.post("/export_dicom/")
-async def export_dicom(file: UploadFile = File(...), metadata: Optional[str] = Form(None)):
+async def export_dicom(
+    file: UploadFile = File(...),
+    metadata: Optional[str] = Form(None),
+    annotations: Optional[str] = Form(None),
+    render: Optional[UploadFile] = File(None),  # PNG с уже «сожжёнными» аннотациями с клиента
+):
     """Принимает исходный DICOM и опциональные metadata (tags/report), возвращает изменённый DICOM base64."""
     try:
         contents = await file.read()
@@ -362,6 +368,214 @@ async def export_dicom(file: UploadFile = File(...), metadata: Optional[str] = F
                     setattr(ds, key, safe_value)
                 except Exception:
                     # Игнорируем неподдерживаемые/некорректные ключи или значения
+                    pass
+
+        # Ветка 1: если клиент прислал готовый рендер (PNG) — используем его БЕЗ доп. конвертаций
+        if render is not None:
+            try:
+                png_bytes = await render.read()
+                img = Image.open(io.BytesIO(png_bytes)).convert('RGB')
+                arr = np.array(img, dtype=np.uint8)
+                # Записываем RGB 8-bit как PixelData, чтобы картинка совпадала 1:1
+                ds.Rows = int(arr.shape[0])
+                ds.Columns = int(arr.shape[1])
+                ds.PhotometricInterpretation = 'RGB'
+                ds.SamplesPerPixel = 3
+                ds.PlanarConfiguration = 0
+                ds.BitsAllocated = 8
+                ds.BitsStored = 8
+                ds.HighBit = 7
+                ds.PixelRepresentation = 0
+                # Чистим потенциальные конфликтующие поля
+                for k in [
+                    'PaletteColorLookupTableUID', 'RedPaletteColorLookupTableData',
+                    'GreenPaletteColorLookupTableData', 'BluePaletteColorLookupTableData',
+                    'SmallestImagePixelValue', 'LargestImagePixelValue',
+                    'VOILUTSequence', 'ModalityLUTSequence',
+                ]:
+                    if hasattr(ds, k):
+                        try:
+                            delattr(ds, k)
+                        except Exception:
+                            pass
+                # Meta + флаги
+                try:
+                    if not hasattr(ds, 'file_meta') or ds.file_meta is None:
+                        from pydicom.dataset import Dataset
+                        ds.file_meta = Dataset()
+                    ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+                except Exception:
+                    pass
+                ds.is_little_endian = True
+                ds.is_implicit_VR = False
+                ds.PixelData = arr.tobytes()
+            except Exception as e:
+                return JSONResponse(status_code=500, content={"message": f"Failed to use client render: {str(e)}"})
+
+        # Ветка 2: если рендера нет — пробуем сжечь аннотации на сервере (как раньше)
+        elif annotations:
+            try:
+                ann = json.loads(annotations)
+            except Exception:
+                ann = None
+            if isinstance(ann, dict):
+                try:
+                    src_pixels = ds.pixel_array
+                    photometric = getattr(ds, 'PhotometricInterpretation', 'MONOCHROME2')
+                    height, width = (src_pixels.shape[0], src_pixels.shape[1]) if src_pixels.ndim >= 2 else (ds.Rows, ds.Columns)
+                    # Создаем базовое изображение только для вычисления координат/отрисовки маски
+                    if photometric.upper() == 'RGB' and src_pixels.ndim == 3 and src_pixels.dtype == np.uint8:
+                        img = Image.fromarray(src_pixels, mode='RGB')
+                    else:
+                        img = Image.new('L', (width, height), 0)
+
+                    draw = ImageDraw.Draw(img)
+                    # Функция поворота точки вокруг центра изображения на угол, как в UI (по часовой стрелке)
+                    try:
+                        rotation_deg = float(ann.get('rotation_deg', 0.0))
+                    except Exception:
+                        rotation_deg = 0.0
+                    import math
+                    if abs(rotation_deg) % 360 != 0:
+                        cx, cy = img.width / 2.0, img.height / 2.0
+                        # Преобразуем экранные координаты (после поворота по часовой) обратно в координаты исходного изображения
+                        # => вращаем точки на противоположный угол (CCW)
+                        theta = math.radians(rotation_deg)
+                        cos_t, sin_t = math.cos(theta), math.sin(theta)
+                        def rot(x, y):
+                            dx, dy = x - cx, y - cy
+                            rx = cos_t * dx - sin_t * dy + cx
+                            ry = sin_t * dx + cos_t * dy + cy
+                            return rx, ry
+                    else:
+                        def rot(x, y):
+                            return x, y
+                    try:
+                        font = ImageFont.load_default()
+                    except Exception:
+                        font = None
+
+                    def parse_color(c, fallback=(255, 255, 0)):
+                        if isinstance(c, str):
+                            # Expect formats like #RRGGBB
+                            c = c.strip()
+                            if c.startswith('#') and len(c) == 7:
+                                r = int(c[1:3], 16)
+                                g = int(c[3:5], 16)
+                                b = int(c[5:7], 16)
+                                return (r, g, b)
+                        return fallback
+
+                    # Тексты
+                    for t in ann.get('texts', []) or []:
+                        try:
+                            x = float(t.get('x', 0)); y = float(t.get('y', 0))
+                            x, y = rot(x, y)
+                            text = str(t.get('text', ''))
+                            color = parse_color(t.get('color'))
+                            # Фон
+                            if photometric.upper() == 'RGB':
+                                bg = (0, 0, 0)
+                            else:
+                                color = 255
+                                bg = 0
+                            if font:
+                                w, h = draw.textsize(text, font=font)
+                            else:
+                                w, h = draw.textsize(text)
+                            draw.rectangle([x - 5, y - 2, x - 5 + w + 10, y - 2 + h + 4], fill=bg)
+                            draw.text((x, y), text, fill=color, font=font)
+                        except Exception:
+                            pass
+
+                    # Стрелки
+                    for a in ann.get('arrows', []) or []:
+                        try:
+                            x1 = float(a.get('x1', 0)); y1 = float(a.get('y1', 0))
+                            x2 = float(a.get('x2', 0)); y2 = float(a.get('y2', 0))
+                            x1, y1 = rot(x1, y1)
+                            x2, y2 = rot(x2, y2)
+                            width = float(a.get('strokeWidth', 3))
+                            color = parse_color(a.get('color')) if photometric.upper() == 'RGB' else 255
+                            draw.line([(x1, y1), (x2, y2)], fill=color, width=int(max(1, round(width))))
+                            # наконечник стрелки
+                            import math
+                            dx = x2 - x1; dy = y2 - y1
+                            length = math.hypot(dx, dy) or 1.0
+                            ux, uy = dx / length, dy / length
+                            arrow_len = 15.0
+                            angle = 0.5
+                            px1 = x2 - arrow_len * (ux * math.cos(angle) + uy * math.sin(angle))
+                            py1 = y2 - arrow_len * (uy * math.cos(angle) - ux * math.sin(angle))
+                            px2 = x2 - arrow_len * (ux * math.cos(-angle) + uy * math.sin(-angle))
+                            py2 = y2 - arrow_len * (uy * math.cos(-angle) - ux * math.sin(-angle))
+                            draw.line([(x2, y2), (px1, py1)], fill=color, width=int(max(1, round(width))))
+                            draw.line([(x2, y2), (px2, py2)], fill=color, width=int(max(1, round(width))))
+                        except Exception:
+                            pass
+
+                    # Линейки
+                    for r in ann.get('rulers', []) or []:
+                        try:
+                            x1 = float(r.get('x1', 0)); y1 = float(r.get('y1', 0))
+                            x2 = float(r.get('x2', 0)); y2 = float(r.get('y2', 0))
+                            x1, y1 = rot(x1, y1)
+                            x2, y2 = rot(x2, y2)
+                            label = str(r.get('label', ''))
+                            color = (255, 255, 0) if photometric.upper() == 'RGB' else 255
+                            draw.line([(x1, y1), (x2, y2)], fill=color, width=3)
+                            # перпендикуляры на концах
+                            import math
+                            dx = x2 - x1; dy = y2 - y1
+                            length = math.hypot(dx, dy) or 1.0
+                            px = -dy / length * 10; py = dx / length * 10
+                            draw.line([(x1 - px, y1 - py), (x1 + px, y1 + py)], fill=color, width=2)
+                            draw.line([(x2 - px, y2 - py), (x2 + px, y2 + py)], fill=color, width=2)
+                            # подпись
+                            if label:
+                                mx = (x1 + x2) / 2 + 15
+                                my = (y1 + y2) / 2
+                                if photometric.upper() == 'RGB':
+                                    text_color = (255, 255, 0); bg = (0, 0, 0)
+                                else:
+                                    text_color = 255; bg = 0
+                                if font:
+                                    w, h = draw.textsize(label, font=font)
+                                else:
+                                    w, h = draw.textsize(label)
+                                draw.rectangle([mx - 5, my - h / 2 - 2, mx - 5 + w + 10, my - h / 2 + h + 4], fill=bg)
+                                draw.text((mx, my - h / 2), label, fill=text_color, font=font)
+                        except Exception:
+                            pass
+
+                    # Сжигаем аннотации непосредственно в исходные пиксели БЕЗ изменения размеров/битности
+                    try:
+                        if photometric.upper() == 'RGB' and src_pixels.ndim == 3 and src_pixels.dtype == np.uint8:
+                            base = Image.fromarray(src_pixels, 'RGB')
+                            overlay = img if img.mode == 'RGB' else img.convert('RGB')
+                            # Используем режим lighter для яркого burn-in
+                            base_np = np.array(base)
+                            over_np = np.array(overlay)
+                            base_np = np.maximum(base_np, over_np)
+                            ds.PixelData = base_np.tobytes()
+                        else:
+                            # Монохромный случай: рисуем маску и ставим пиксели в максимальное (или минимальное для MONOCHROME1) значение
+                            mask = img if img.mode == 'L' else img.convert('L')
+                            mask_np = np.array(mask, dtype=np.uint8)
+                            arr = np.array(src_pixels)  # сохранить dtype
+                            if np.issubdtype(arr.dtype, np.integer):
+                                info = np.iinfo(arr.dtype)
+                                maxv = info.max
+                                minv = info.min
+                            else:
+                                maxv, minv = 255, 0
+                            target = maxv if photometric.upper() != 'MONOCHROME1' else minv
+                            arr[mask_np > 0] = target
+                            ds.PixelData = arr.tobytes()
+                    except Exception:
+                        pass
+                except Exception:
+                    # Не фейлим экспорт, просто пропускаем аннотации
                     pass
 
         out_buf = io.BytesIO()

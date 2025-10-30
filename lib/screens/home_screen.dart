@@ -5,6 +5,8 @@ import 'package:flutter/gestures.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'dart:typed_data';
+import 'dart:ui' as ui;
+import 'package:flutter/rendering.dart';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -387,6 +389,8 @@ class _HomeScreenState extends State<HomeScreen> {
   
   // Переменные для яркости
   double _brightness = 1.0;
+  // Ключ для захвата экрана (PNG)
+  final GlobalKey _captureKey = GlobalKey();
   double _initialBrightness = 1.0;
   
   // Переменные для инверсии
@@ -410,6 +414,18 @@ class _HomeScreenState extends State<HomeScreen> {
           icon: Icons.folder_open,
           shortcut: 'Ctrl+O',
         ),
+        MenuItem(
+          name: 'Save PNG with annotations',
+          icon: Icons.image,
+          shortcut: 'Ctrl+Shift+S',
+          enabled: _imageBytes != null,
+        ),
+        MenuItem(
+          name: 'Save with annotations',
+          icon: Icons.save,
+          shortcut: 'Ctrl+S',
+          enabled: _originalDicomBytes != null,
+        ),
         MenuItem(name: '-'), // Разделитель
         MenuItem(
           name: 'Exit',
@@ -428,11 +444,63 @@ class _HomeScreenState extends State<HomeScreen> {
           case 'Open File':
             _openAndProcessFile();
             break;
+          case 'Save PNG with annotations':
+            _saveAnnotatedPng();
+            break;
+          case 'Save with annotations':
+            if (_originalDicomBytes != null) {
+              _exportDicom();
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Нет загруженного DICOM для сохранения'), backgroundColor: Colors.red),
+              );
+            }
+            break;
           case 'Exit':
             SystemNavigator.pop();
             break;
         }
         break;
+    }
+  }
+
+  Future<void> _saveAnnotatedPng() async {
+    try {
+      if (_imageBytes == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Нет изображения для сохранения'), backgroundColor: Colors.red),
+        );
+        return;
+      }
+
+      // Захватываем ровно то, что на экране внутри RepaintBoundary
+      final boundary = _captureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null) {
+        throw Exception('Render boundary not found');
+      }
+      // Используем повышенный pixelRatio для четкости
+      final image = await boundary.toImage(pixelRatio: ui.window.devicePixelRatio);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      final pngBytes = byteData!.buffer.asUint8List();
+
+      final dir = await getApplicationDocumentsDirectory();
+      final outDir = Directory('${dir.path}/png_exports');
+      if (!await outDir.exists()) await outDir.create(recursive: true);
+      final baseName = (_currentFileName ?? 'image').replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+      final file = File('${outDir.path}/${baseName.replaceAll('.dcm','')}_annotated.png');
+      await file.writeAsBytes(pngBytes);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('PNG сохранён: ${file.path}')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка сохранения PNG: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -619,6 +687,8 @@ class _HomeScreenState extends State<HomeScreen> {
               
               setState(() {
                 _imageBytes = imageBytes;
+                _isLoading = false;
+                _errorMessage = '';
                 print("Изображение декодировано, размер: ${_imageBytes?.length ?? 0} байт");
                 
                 _originalImageBytes = _imageBytes; // Сохраняем исходное изображение
@@ -1113,6 +1183,65 @@ class _HomeScreenState extends State<HomeScreen> {
       request.files.add(http.MultipartFile.fromBytes('file', _originalDicomBytes!, filename: _currentFileName ?? 'image.dcm'));
       final meta = jsonEncode({'tags': _dicomTags, 'report': _reportController.text});
       request.fields['metadata'] = meta;
+
+      // Подготовка аннотаций для сервера (координаты уже в системе изображения)
+      String _colorToHex(Color c) {
+        return '#${c.red.toRadixString(16).padLeft(2, '0')}${c.green.toRadixString(16).padLeft(2, '0')}${c.blue.toRadixString(16).padLeft(2, '0')}'.toUpperCase();
+      }
+
+      final texts = _textAnnotations.map((t) => {
+        'x': t.position.dx,
+        'y': t.position.dy,
+        'text': t.text,
+        'color': _colorToHex(t.color),
+        'fontSize': t.fontSize,
+      }).toList();
+
+      final arrows = _arrowAnnotations.map((a) => {
+        'x1': a.start.dx,
+        'y1': a.start.dy,
+        'x2': a.end.dx,
+        'y2': a.end.dy,
+        'color': _colorToHex(a.color),
+        'strokeWidth': a.strokeWidth,
+      }).toList();
+
+      final rulers = <Map<String, dynamic>>[];
+      for (int i = 0; i < _completedRulerLines.length; i++) {
+        final line = _completedRulerLines[i];
+        final pixelDistance = (line.end - line.start).distance;
+        final realDistanceMm = pixelDistance * (line.pixelSpacing.isFinite && line.pixelSpacing > 0 ? line.pixelSpacing : _pixelSpacingRow);
+        final label = 'L${i + 1}: ${realDistanceMm.toStringAsFixed(2)} mm (${pixelDistance.toStringAsFixed(1)} px)';
+        rulers.add({
+          'x1': line.start.dx,
+          'y1': line.start.dy,
+          'x2': line.end.dx,
+          'y2': line.end.dy,
+          'label': label,
+        });
+      }
+
+      final annotations = jsonEncode({
+        'texts': texts,
+        'arrows': arrows,
+        'rulers': rulers,
+        // Параметры вида для совпадения с экраном
+        'rotation_deg': _rotationAngle, // в градусах, кратно 90
+        'inverted': _isInverted,
+        'brightness': _brightness,
+      });
+      request.fields['annotations'] = annotations;
+
+      // Добавляем готовый PNG-рендер из области RepaintBoundary, чтобы DICOM совпадал 1:1
+      final boundary = _captureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary != null) {
+        final image = await boundary.toImage(pixelRatio: ui.window.devicePixelRatio);
+        final pngData = await image.toByteData(format: ui.ImageByteFormat.png);
+        if (pngData != null) {
+          final pngBytes = pngData.buffer.asUint8List();
+          request.files.add(http.MultipartFile.fromBytes('render', pngBytes, filename: 'render.png'));
+        }
+      }
       final streamed = await request.send();
       final body = await streamed.stream.bytesToString();
       if (streamed.statusCode == 200) {
@@ -1520,7 +1649,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 panEnabled: _currentTool == ToolMode.pan,
                                                 scaleEnabled: _currentTool == ToolMode.pan,
                                                 minScale: 0.1, maxScale: 8.0,
-                                                child: Stack(
+                                                child: RepaintBoundary(
+                                                  key: _captureKey,
+                                                  child: Stack(
                                                   fit: StackFit.expand,
                                                   children: [
                                                     // Применяем яркость, инверсию и поворот прямо во Flutter
@@ -1582,6 +1713,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                   if (_isUpdatingWL) const Center(child: CircularProgressIndicator()),
                                                 ],
                                                 ),
+                                              ),
                                               ),
                                             ),
                                           ),
