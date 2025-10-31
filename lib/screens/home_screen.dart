@@ -1679,6 +1679,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                                           child: _imageBytes != null 
                                                             ? Image.memory(
                                                                 _imageBytes!,
+                                                                width: double.infinity,
+                                                                height: double.infinity,
+                                                                fit: BoxFit.contain,
+                                                                alignment: Alignment.center,
                                                                 errorBuilder: (context, error, stackTrace) {
                                                                   print("Ошибка при отрисовке изображения: $error");
                                                                   return Container(
