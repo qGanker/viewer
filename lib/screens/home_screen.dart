@@ -1291,6 +1291,29 @@ class _HomeScreenState extends State<HomeScreen> {
       focusNode: FocusNode()..requestFocus(),
       onKey: (RawKeyEvent event) {
         if (event is RawKeyDownEvent) {
+          // Если фокус в любом текстовом поле (включая вложенные EditableText), не обрабатываем хоткеи
+          final primaryFocus = FocusManager.instance.primaryFocus;
+          bool isTextInput = false;
+          if (primaryFocus != null) {
+            final ctx = primaryFocus.context;
+            if (ctx != null) {
+              final w = ctx.widget;
+              if (w is EditableText) {
+                isTextInput = true;
+              } else {
+                // Проверяем предков на наличие текстовых виджетов
+                if (ctx.findAncestorWidgetOfExactType<EditableText>() != null) {
+                  isTextInput = true;
+                } else if (ctx.findAncestorWidgetOfExactType<TextField>() != null) {
+                  isTextInput = true;
+                } else if (ctx.findAncestorWidgetOfExactType<TextFormField>() != null) {
+                  isTextInput = true;
+                }
+              }
+            }
+          }
+          if (isTextInput) return;
+
           // Нормализуем клавишу к английской букве для работы с любой раскладкой
           String keyString = KeyboardUtils.normalizeKey(event.logicalKey);
           
@@ -1654,8 +1677,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                                   child: Stack(
                                                   fit: StackFit.expand,
                                                   children: [
+                                                    // Базовый чёрный слой, чтобы фон всегда оставался чёрным
+                                                    Container(color: Colors.black),
                                                     // Применяем яркость, инверсию и поворот прямо во Flutter
-                                                    Transform.rotate(
+                                                    ClipRect(
+                                                    child: Transform.rotate(
                                                       angle: _rotationAngle * 3.14159 / 180, // Конвертируем градусы в радианы
                                                       child: ColorFiltered(
                                                         colorFilter: ColorFilter.matrix([
@@ -1701,7 +1727,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                               ),
                                                         ),
                                                       ),
-                                                  ),
+                                                  )),
                                                   CustomPaint(
                                                     painter: RulerPainter(
                                                       currentPoints: List.of(_rulerPoints), 
