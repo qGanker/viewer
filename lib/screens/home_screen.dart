@@ -19,10 +19,10 @@ import '../utils/keyboard_utils.dart';
 import '../widgets/windows_menu_bar.dart';
 
 // Перечисление для инструментов
-enum ToolMode { pan, ruler, rotate, brightness, invert, annotation }
+enum ToolMode { pan, ruler, angle, rotate, brightness, invert, annotation }
 
 // Перечисление для типов действий
-enum ActionType { rulerAdded, textAdded, arrowAdded, brightnessChanged, inverted, rotated }
+enum ActionType { rulerAdded, angleAdded, textAdded, arrowAdded, brightnessChanged, inverted, rotated }
 
 // Класс для хранения истории действий
 class ActionHistory {
@@ -211,6 +211,40 @@ class RulerLine {
   }
 }
 
+// Класс для хранения одного измерения угла
+class AngleMeasurement {
+  final Offset vertex;  // Вершина угла
+  final Offset point1;  // Первая точка на первом луче
+  final Offset point2;  // Вторая точка на втором луче
+  
+  AngleMeasurement({
+    required this.vertex,
+    required this.point1,
+    required this.point2,
+  });
+  
+  // Вычисление угла в градусах
+  double get angleDegrees {
+    // Векторы от вершины к точкам
+    final v1 = point1 - vertex;
+    final v2 = point2 - vertex;
+    
+    // Вычисляем угол между векторами
+    final dot = v1.dx * v2.dx + v1.dy * v2.dy;
+    final mag1 = sqrt(v1.dx * v1.dx + v1.dy * v1.dy);
+    final mag2 = sqrt(v2.dx * v2.dx + v2.dy * v2.dy);
+    
+    if (mag1 == 0 || mag2 == 0) return 0.0;
+    
+    final cosAngle = dot / (mag1 * mag2);
+    // Ограничиваем значение cos для избежания ошибок округления
+    final clampedCos = cosAngle.clamp(-1.0, 1.0);
+    final angleRad = acos(clampedCos);
+    
+    return angleRad * 180 / pi;
+  }
+}
+
 // Класс для рисования линейки
 class RulerPainter extends CustomPainter {
   final List<Offset> currentPoints; // Текущие точки для рисования
@@ -325,6 +359,138 @@ class RulerPainter extends CustomPainter {
   }
 }
 
+// Класс для рисования углов
+class AnglePainter extends CustomPainter {
+  final List<Offset> currentPoints; // Текущие точки для рисования (0-3 точки)
+  final List<AngleMeasurement> completedAngles; // Завершенные измерения углов
+  
+  AnglePainter({
+    required this.currentPoints,
+    required this.completedAngles,
+  });
+  
+  @override
+  void paint(Canvas canvas, Size size) {
+    try {
+      final paint = Paint()..color = Colors.cyan..strokeWidth = 2..style = PaintingStyle.stroke;
+      final fillPaint = Paint()..color = Colors.cyan..style = PaintingStyle.fill;
+      
+      // Рисуем все завершенные углы
+      for (int i = 0; i < completedAngles.length; i++) {
+        final angle = completedAngles[i];
+        _drawAngle(canvas, angle.vertex, angle.point1, angle.point2, paint, fillPaint, i + 1, angle.angleDegrees);
+      }
+      
+      // Рисуем текущие точки и углы (если есть)
+      if (currentPoints.isNotEmpty) {
+        // Рисуем точки
+        for (var point in currentPoints) {
+          canvas.drawCircle(point, 6, fillPaint);
+          canvas.drawCircle(point, 6, paint..color = Colors.black);
+        }
+        
+        // Рисуем предварительный просмотр угла
+        if (currentPoints.length == 2) {
+          // Рисуем линию от первой точки (вершина) ко второй
+          canvas.drawLine(currentPoints[0], currentPoints[1], paint);
+        } else if (currentPoints.length == 3) {
+          // Рисуем полный угол
+          final vertex = currentPoints[0];
+          final point1 = currentPoints[1];
+          final point2 = currentPoints[2];
+          
+          // Вычисляем угол для предварительного просмотра
+          final v1 = point1 - vertex;
+          final v2 = point2 - vertex;
+          final dot = v1.dx * v2.dx + v1.dy * v2.dy;
+          final mag1 = sqrt(v1.dx * v1.dx + v1.dy * v1.dy);
+          final mag2 = sqrt(v2.dx * v2.dx + v2.dy * v2.dy);
+          double angleDeg = 0.0;
+          if (mag1 > 0 && mag2 > 0) {
+            final cosAngle = (dot / (mag1 * mag2)).clamp(-1.0, 1.0);
+            angleDeg = acos(cosAngle) * 180 / pi;
+          }
+          
+          _drawAngle(canvas, vertex, point1, point2, paint, fillPaint, completedAngles.length + 1, angleDeg);
+        }
+      }
+    } catch (e) {
+      print("Ошибка в AnglePainter: $e");
+    }
+  }
+  
+  void _drawAngle(Canvas canvas, Offset vertex, Offset point1, Offset point2, Paint paint, Paint fillPaint, int angleNumber, double angleDegrees) {
+    // Рисуем два луча от вершины
+    canvas.drawLine(vertex, point1, paint..strokeWidth = 3);
+    canvas.drawLine(vertex, point2, paint..strokeWidth = 3);
+    
+    // Рисуем дугу угла
+    final v1 = point1 - vertex;
+    final v2 = point2 - vertex;
+    final mag1 = sqrt(v1.dx * v1.dx + v1.dy * v1.dy);
+    final mag2 = sqrt(v2.dx * v2.dx + v2.dy * v2.dy);
+    
+    if (mag1 > 0 && mag2 > 0) {
+      // Вычисляем углы для дуги
+      final angle1 = atan2(v1.dy, v1.dx);
+      final angle2 = atan2(v2.dy, v2.dx);
+      
+      // Радиус дуги (30 пикселей или меньше, если лучи короткие)
+      final arcRadius = min(30.0, min(mag1, mag2) * 0.3);
+      
+      // Рисуем дугу
+      final rect = Rect.fromCircle(center: vertex, radius: arcRadius);
+      canvas.drawArc(
+        rect,
+        angle1,
+        angle2 - angle1,
+        false,
+        paint..strokeWidth = 2,
+      );
+    }
+    
+    // Рисуем вершину угла более заметно
+    canvas.drawCircle(vertex, 8, fillPaint);
+    canvas.drawCircle(vertex, 8, paint..color = Colors.black..strokeWidth = 2);
+    
+    // Рисуем текст с углом
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: '∠$angleNumber: ${angleDegrees.toStringAsFixed(1)}°',
+        style: const TextStyle(
+          color: Colors.cyan,
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          backgroundColor: Colors.black87,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    
+    // Позиционируем текст рядом с вершиной
+    final textOffset = Offset(
+      vertex.dx + 20,
+      vertex.dy - textPainter.height / 2,
+    );
+    
+    // Рисуем фон для текста
+    final bgRect = Rect.fromLTWH(
+      textOffset.dx - 5,
+      textOffset.dy - 2,
+      textPainter.width + 10,
+      textPainter.height + 4,
+    );
+    canvas.drawRect(bgRect, Paint()..color = Colors.black87);
+    
+    textPainter.paint(canvas, textOffset);
+  }
+  
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) {
+    return true;
+  }
+}
+
 // Новая функция для декодирования в фоне
 Uint8List _decodeResponseInIsolate(String responseBody) {
   final Map<String, dynamic> data = jsonDecode(responseBody);
@@ -364,6 +530,12 @@ class _HomeScreenState extends State<HomeScreen> {
   
   // Линейка: все завершенные измерения (L1, L2, L3...)
   List<RulerLine> _completedRulerLines = [];
+  
+  // Угол: текущие точки (0-3 точки) для активного измерения
+  List<Offset> _anglePoints = [];
+  
+  // Угол: все завершенные измерения (∠1, ∠2, ∠3...)
+  List<AngleMeasurement> _completedAngles = [];
   double _pixelSpacingRow = 1.0;
   final TransformationController _transformationController = TransformationController();
 
@@ -509,6 +681,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       // Очищаем все состояния инструментов
       _rulerPoints.clear();
+      _anglePoints.clear();
       _arrowPoints.clear();
       _isDragging = false;
       _lastTapPosition = null;
@@ -567,6 +740,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _windowWidth = _initialWW;
       _rulerPoints.clear();
       _completedRulerLines.clear();
+      _anglePoints.clear();
+      _completedAngles.clear();
       _textAnnotations.clear();
       _arrowAnnotations.clear();
       _arrowPoints.clear();
@@ -753,6 +928,38 @@ class _HomeScreenState extends State<HomeScreen> {
       _matrixCacheValid = true;
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
+    
+    // Обрабатываем клик для инструмента угла
+    if (_currentTool == ToolMode.angle) {
+      setState(() {
+        if (_anglePoints.length == 0) {
+          // Первый клик - устанавливаем вершину угла
+          _anglePoints.add(sceneOffset);
+          print("Угол: установлена вершина");
+        } else if (_anglePoints.length == 1) {
+          // Второй клик - устанавливаем первую точку на луче
+          _anglePoints.add(sceneOffset);
+          print("Угол: установлена первая точка на луче");
+        } else if (_anglePoints.length == 2) {
+          // Третий клик - устанавливаем вторую точку на луче и завершаем измерение
+          _anglePoints.add(sceneOffset);
+          final completedAngle = AngleMeasurement(
+            vertex: _anglePoints[0],
+            point1: _anglePoints[1],
+            point2: _anglePoints[2],
+          );
+          _completedAngles = List.of(_completedAngles)..add(completedAngle);
+          _addToHistory(ActionType.angleAdded, null);
+          print("Угол: завершено измерение, угол = ${completedAngle.angleDegrees.toStringAsFixed(1)}°");
+          // Очищаем точки для следующего измерения
+          _anglePoints = [];
+        } else {
+          // Если по какой-то причине больше 3 точек, начинаем заново
+          _anglePoints = [sceneOffset];
+        }
+      });
+      return;
+    }
     
     // Обрабатываем клик только если активен инструмент линейки
     if (_currentTool != ToolMode.ruler) return;
@@ -1021,6 +1228,12 @@ class _HomeScreenState extends State<HomeScreen> {
             _completedRulerLines.removeLast();
           }
           break;
+        case ActionType.angleAdded:
+          // Удаляем последнее завершенное измерение угла
+          if (_completedAngles.isNotEmpty) {
+            _completedAngles.removeLast();
+          }
+          break;
         case ActionType.textAdded:
           // Удаляем последнюю текстовую аннотацию
           if (_textAnnotations.isNotEmpty) {
@@ -1096,6 +1309,43 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       final baseName = (_currentFileName ?? 'session').replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
       final file = File('${metaDir.path}/$baseName.metadata.json');
+      // Подготовка данных аннотаций для сохранения
+      final rulers = _completedRulerLines.map((line) => {
+        'x1': line.start.dx,
+        'y1': line.start.dy,
+        'x2': line.end.dx,
+        'y2': line.end.dy,
+        'distance_mm': line.realDistanceMm,
+        'distance_px': line.distance,
+      }).toList();
+      
+      final angles = _completedAngles.map((angle) => {
+        'vertexX': angle.vertex.dx,
+        'vertexY': angle.vertex.dy,
+        'point1X': angle.point1.dx,
+        'point1Y': angle.point1.dy,
+        'point2X': angle.point2.dx,
+        'point2Y': angle.point2.dy,
+        'angle_degrees': angle.angleDegrees,
+      }).toList();
+      
+      final texts = _textAnnotations.map((text) => {
+        'x': text.position.dx,
+        'y': text.position.dy,
+        'text': text.text,
+        'color': text.color.value,
+        'fontSize': text.fontSize,
+      }).toList();
+      
+      final arrows = _arrowAnnotations.map((arrow) => {
+        'x1': arrow.start.dx,
+        'y1': arrow.start.dy,
+        'x2': arrow.end.dx,
+        'y2': arrow.end.dy,
+        'color': arrow.color.value,
+        'strokeWidth': arrow.strokeWidth,
+      }).toList();
+      
       final data = {
         'patient_name': _patientName,
         'report': _dicomReport,
@@ -1103,6 +1353,17 @@ class _HomeScreenState extends State<HomeScreen> {
         'window_center': _windowCenter,
         'window_width': _windowWidth,
         'pixel_spacing_row': _pixelSpacingRow,
+        'annotations': {
+          'rulers': rulers,
+          'angles': angles,
+          'texts': texts,
+          'arrows': arrows,
+        },
+        'view_settings': {
+          'brightness': _brightness,
+          'inverted': _isInverted,
+          'rotation_deg': _rotationAngle,
+        },
         'updated_at': DateTime.now().toIso8601String(),
       };
       await file.writeAsString(const JsonEncoder.withIndent('  ').convert(data));
@@ -1221,10 +1482,27 @@ class _HomeScreenState extends State<HomeScreen> {
         });
       }
 
+      final angles = <Map<String, dynamic>>[];
+      for (int i = 0; i < _completedAngles.length; i++) {
+        final angle = _completedAngles[i];
+        final label = '∠${i + 1}: ${angle.angleDegrees.toStringAsFixed(1)}°';
+        angles.add({
+          'vertexX': angle.vertex.dx,
+          'vertexY': angle.vertex.dy,
+          'point1X': angle.point1.dx,
+          'point1Y': angle.point1.dy,
+          'point2X': angle.point2.dx,
+          'point2Y': angle.point2.dy,
+          'angle': angle.angleDegrees,
+          'label': label,
+        });
+      }
+
       final annotations = jsonEncode({
         'texts': texts,
         'arrows': arrows,
         'rulers': rulers,
+        'angles': angles,
         // Параметры вида для совпадения с экраном
         'rotation_deg': _rotationAngle, // в градусах, кратно 90
         'inverted': _isInverted,
@@ -1385,6 +1663,11 @@ class _HomeScreenState extends State<HomeScreen> {
             toolChanged = true;
             toolName = 'Линейка';
             _switchTool(ToolMode.ruler);
+          } else if (HotkeyService.isKeyForTool(keyString, 'angle', ctrl: ctrlPressed, alt: altPressed, shift: shiftPressed)) {
+            print('✓ ANGLE hotkey matched');
+            toolChanged = true;
+            toolName = 'Угол';
+            _switchTool(ToolMode.angle);
           } else if (HotkeyService.isKeyForTool(keyString, 'brightness', ctrl: ctrlPressed, alt: altPressed, shift: shiftPressed)) {
             print('✓ BRIGHTNESS hotkey matched');
             toolChanged = true;
@@ -1528,6 +1811,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                                 const SizedBox(height: 15),
                                 IconButton(
+                                  icon: const Icon(Icons.alt_route), 
+                                  color: _currentTool == ToolMode.angle ? Colors.lightBlueAccent : Colors.white, 
+                                  onPressed: () => _switchTool(ToolMode.angle),
+                                  tooltip: 'Измерение угла (3 клика)',
+                                ),
+                                const SizedBox(height: 15),
+                                IconButton(
                                   icon: const Icon(Icons.rotate_90_degrees_cw), 
                                   color: _currentTool == ToolMode.rotate ? Colors.lightBlueAccent : (_rotationAngle != 0.0 ? Colors.orange : Colors.white), 
                                   onPressed: () {
@@ -1584,6 +1874,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                       _windowWidth = _initialWW;
                                       _rulerPoints.clear();
                                       _completedRulerLines.clear(); // Очищаем завершенные линии
+                                      _anglePoints.clear(); // Очищаем точки углов
+                                      _completedAngles.clear(); // Очищаем завершенные углы
                                       _textAnnotations.clear(); // Очищаем аннотации
                                       _arrowAnnotations.clear(); // Очищаем стрелки
                                       _arrowPoints.clear(); // Очищаем точки стрелок
@@ -1733,6 +2025,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                                       currentPoints: List.of(_rulerPoints), 
                                                       completedLines: List.of(_completedRulerLines),
                                                       pixelSpacing: _pixelSpacingRow
+                                                    ),
+                                                    child: Container(), // Пустой контейнер для предотвращения ошибок
+                                                  ),
+                                                  CustomPaint(
+                                                    painter: AnglePainter(
+                                                      currentPoints: List.of(_anglePoints),
+                                                      completedAngles: List.of(_completedAngles),
                                                     ),
                                                     child: Container(), // Пустой контейнер для предотвращения ошибок
                                                   ),

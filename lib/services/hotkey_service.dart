@@ -44,6 +44,9 @@ class HotkeyService {
       case 'ruler':
         expectedCombination = _hotkeySettings.rulerKey;
         break;
+      case 'angle':
+        expectedCombination = _hotkeySettings.angleKey;
+        break;
       case 'brightness':
         expectedCombination = _hotkeySettings.brightnessKey;
         break;
@@ -92,6 +95,7 @@ class HotkeyService {
   static String? getToolNameForKey(String keyString) {
     if (_hotkeySettings.panKey == keyString) return 'Панорамирование';
     if (_hotkeySettings.rulerKey == keyString) return 'Линейка';
+    if (_hotkeySettings.angleKey == keyString) return 'Угол';
     if (_hotkeySettings.brightnessKey == keyString) return 'Яркость';
     if (_hotkeySettings.invertKey == keyString) return 'Инверсия';
     if (_hotkeySettings.rotateKey == keyString) return 'Поворот';

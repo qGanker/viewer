@@ -70,6 +70,7 @@ class KeyCombination {
 class HotkeySettings {
   final KeyCombination panKey;
   final KeyCombination rulerKey;
+  final KeyCombination angleKey;
   final KeyCombination brightnessKey;
   final KeyCombination invertKey;
   final KeyCombination rotateKey;
@@ -79,6 +80,7 @@ class HotkeySettings {
   HotkeySettings({
     KeyCombination? panKey,
     KeyCombination? rulerKey,
+    KeyCombination? angleKey,
     KeyCombination? brightnessKey,
     KeyCombination? invertKey,
     KeyCombination? rotateKey,
@@ -86,6 +88,7 @@ class HotkeySettings {
     KeyCombination? undoKey,
   }) : panKey = panKey ?? const KeyCombination(key: 'P'),
        rulerKey = rulerKey ?? const KeyCombination(key: 'R'),
+       angleKey = angleKey ?? const KeyCombination(key: 'G'),
        brightnessKey = brightnessKey ?? const KeyCombination(key: 'B'),
        invertKey = invertKey ?? const KeyCombination(key: 'I'),
        rotateKey = rotateKey ?? const KeyCombination(key: 'O'),
@@ -96,6 +99,7 @@ class HotkeySettings {
     return {
       'panKey': panKey.toJson(),
       'rulerKey': rulerKey.toJson(),
+      'angleKey': angleKey.toJson(),
       'brightnessKey': brightnessKey.toJson(),
       'invertKey': invertKey.toJson(),
       'rotateKey': rotateKey.toJson(),
@@ -108,6 +112,7 @@ class HotkeySettings {
     return HotkeySettings(
       panKey: _parseKeyCombination(json['panKey'], 'P'),
       rulerKey: _parseKeyCombination(json['rulerKey'], 'R'),
+      angleKey: _parseKeyCombination(json['angleKey'], 'G'), // Поддержка старых настроек без angleKey
       brightnessKey: _parseKeyCombination(json['brightnessKey'], 'B'),
       invertKey: _parseKeyCombination(json['invertKey'], 'I'),
       rotateKey: _parseKeyCombination(json['rotateKey'], 'O'),
@@ -148,6 +153,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Прямые поля вместо объекта
   KeyCombination _panKey = const KeyCombination(key: 'P');
   KeyCombination _rulerKey = const KeyCombination(key: 'R');
+  KeyCombination _angleKey = const KeyCombination(key: 'G');
   KeyCombination _brightnessKey = const KeyCombination(key: 'B');
   KeyCombination _invertKey = const KeyCombination(key: 'I');
   KeyCombination _rotateKey = const KeyCombination(key: 'O');
@@ -160,7 +166,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   
   final Map<String, String> _toolNames = {
     'panKey': 'Панорамирование',
-    'rulerKey': 'Линейка', 
+    'rulerKey': 'Линейка',
+    'angleKey': 'Угол',
     'brightnessKey': 'Яркость',
     'invertKey': 'Инверсия',
     'rotateKey': 'Поворот',
@@ -186,22 +193,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final settingsJson = prefs.getString('hotkey_settings');
       
       if (settingsJson != null) {
-        final decodedSettings = jsonDecode(settingsJson);
-        if (decodedSettings != null && mounted) {
-          final hotkeySettings = HotkeySettings.fromJson(decodedSettings);
-          setState(() {
-            _panKey = hotkeySettings.panKey;
-            _rulerKey = hotkeySettings.rulerKey;
-            _brightnessKey = hotkeySettings.brightnessKey;
-            _invertKey = hotkeySettings.invertKey;
-            _rotateKey = hotkeySettings.rotateKey;
-            _annotationKey = hotkeySettings.annotationKey;
-            _undoKey = hotkeySettings.undoKey;
-          });
+        try {
+          final decodedSettings = jsonDecode(settingsJson);
+          if (decodedSettings != null && decodedSettings is Map && mounted) {
+            final hotkeySettings = HotkeySettings.fromJson(Map<String, dynamic>.from(decodedSettings));
+            setState(() {
+              _panKey = hotkeySettings.panKey;
+              _rulerKey = hotkeySettings.rulerKey;
+              _angleKey = hotkeySettings.angleKey;
+              _brightnessKey = hotkeySettings.brightnessKey;
+              _invertKey = hotkeySettings.invertKey;
+              _rotateKey = hotkeySettings.rotateKey;
+              _annotationKey = hotkeySettings.annotationKey;
+              _undoKey = hotkeySettings.undoKey;
+            });
+          }
+        } catch (parseError) {
+          print('Ошибка при парсинге настроек: $parseError');
+          // При ошибке парсинга используем значения по умолчанию
+          // Они уже установлены в initState
         }
       }
     } catch (e) {
       print('Ошибка при загрузке настроек: $e');
+      // При ошибке используем значения по умолчанию
     }
   }
 
@@ -211,6 +226,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final hotkeySettings = HotkeySettings(
         panKey: _panKey,
         rulerKey: _rulerKey,
+        angleKey: _angleKey,
         brightnessKey: _brightnessKey,
         invertKey: _invertKey,
         rotateKey: _rotateKey,
@@ -234,6 +250,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     List<KeyCombination> allKeys = [
       _panKey,
       _rulerKey,
+      _angleKey,
       _brightnessKey,
       _invertKey,
       _rotateKey,
@@ -242,7 +259,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ];
     
     List<String> keyNames = [
-      'panKey', 'rulerKey', 'brightnessKey', 'invertKey',
+      'panKey', 'rulerKey', 'angleKey', 'brightnessKey', 'invertKey',
       'rotateKey', 'annotationKey', 'undoKey'
     ];
     
@@ -263,6 +280,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           break;
         case 'rulerKey':
           _rulerKey = combination;
+          break;
+        case 'angleKey':
+          _angleKey = combination;
           break;
         case 'brightnessKey':
           _brightnessKey = combination;
@@ -601,6 +621,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   children: [
                     _buildHotkeyRow('panKey', _toolNames['panKey'] ?? 'Панорамирование', _panKey),
                     _buildHotkeyRow('rulerKey', _toolNames['rulerKey'] ?? 'Линейка', _rulerKey),
+                    _buildHotkeyRow('angleKey', _toolNames['angleKey'] ?? 'Угол', _angleKey),
                     _buildHotkeyRow('brightnessKey', _toolNames['brightnessKey'] ?? 'Яркость', _brightnessKey),
                     _buildHotkeyRow('invertKey', _toolNames['invertKey'] ?? 'Инверсия', _invertKey),
                     _buildHotkeyRow('rotateKey', _toolNames['rotateKey'] ?? 'Поворот', _rotateKey),
