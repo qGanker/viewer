@@ -1536,6 +1536,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 if (data['tags'] is Map) {
                   _dicomTags = (data['tags'] as Map)
                       .map((key, value) => MapEntry(key.toString(), value.toString()));
+                  print("Загружено тегов: ${_dicomTags.length}");
+                  print("Ключи тегов: ${_dicomTags.keys.toList()}");
+                  
+                  // Принудительно добавляем PixelSpacing, если его нет, но есть pixel_spacing_row
+                  if (!_dicomTags.containsKey('PixelSpacing') && data.containsKey('pixel_spacing_row')) {
+                    final psValue = (data['pixel_spacing_row'] as num).toDouble();
+                    _dicomTags['PixelSpacing'] = "${psValue.toStringAsFixed(3)} мм/пиксель (добавлено автоматически)";
+                    print("PixelSpacing принудительно добавлен в теги: ${_dicomTags['PixelSpacing']}");
+                  }
+                  
+                  if (_dicomTags.containsKey('PixelSpacing')) {
+                    print("PixelSpacing найден в тегах: ${_dicomTags['PixelSpacing']}");
+                  } else {
+                    print("ВНИМАНИЕ: PixelSpacing НЕ найден в тегах!");
+                  }
+                } else {
+                  print("ОШИБКА: data['tags'] не является Map, тип: ${data['tags'].runtimeType}");
+                  _dicomTags = {};
+                  // Если теги не пришли, но есть pixel_spacing_row, создаем теги
+                  if (data.containsKey('pixel_spacing_row')) {
+                    final psValue = (data['pixel_spacing_row'] as num).toDouble();
+                    _dicomTags['PixelSpacing'] = "${psValue.toStringAsFixed(3)} мм/пиксель (добавлено автоматически)";
+                    print("Создан словарь тегов с PixelSpacing: ${_dicomTags['PixelSpacing']}");
+                  }
                 }
                 if (data['report'] != null) {
                   _dicomReport = data['report'].toString();
@@ -1546,7 +1570,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _dicomTags.forEach((k, v) {
                   _tagControllers[k] = TextEditingController(text: v);
                 });
-                _pixelSpacingRow = (data['pixel_spacing_row'] as num).toDouble();
+                
+                // Убеждаемся, что PixelSpacing есть в контроллерах
+                if (_dicomTags.containsKey('PixelSpacing') && !_tagControllers.containsKey('PixelSpacing')) {
+                  _tagControllers['PixelSpacing'] = TextEditingController(text: _dicomTags['PixelSpacing']!);
+                  print("PixelSpacing добавлен в контроллеры");
+                }
+                final newPixelSpacing = (data['pixel_spacing_row'] as num).toDouble();
+                
+                // Обновляем калибровку всех существующих линеек при загрузке нового файла
+                if (_pixelSpacingRow != newPixelSpacing && _completedRulerLines.isNotEmpty) {
+                  print("Обновление калибровки линеек: старый PixelSpacing=${_pixelSpacingRow}, новый=${newPixelSpacing}");
+                  _completedRulerLines = _completedRulerLines.map((line) {
+                    return RulerLine(
+                      start: line.start,
+                      end: line.end,
+                      pixelSpacing: newPixelSpacing,
+                    );
+                  }).toList();
+                }
+                
+                _pixelSpacingRow = newPixelSpacing;
                 _windowCenter = (data['window_center'] as num).toDouble();
                 _windowWidth = (data['window_width'] as num).toDouble();
                 _initialWC = _windowCenter;
@@ -1554,6 +1598,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _isLoading = false;
                 
                 print("Все данные успешно установлены");
+                print("Автоматическая калибровка линейки: PixelSpacing=${_pixelSpacingRow} мм/пиксель");
               });
               
               // Загружаем сохраненные метаданные, если они есть
@@ -2585,6 +2630,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _dicomReport = _reportController.text.trim();
       // Сохраняем все теги из контроллеров, а не только те, что есть в _dicomTags
       _dicomTags = Map.fromEntries(_tagControllers.entries.map((e) => MapEntry(e.key, e.value.text.trim())));
+      
+      // Убеждаемся, что PixelSpacing всегда сохранен в тегах
+      if (!_dicomTags.containsKey('PixelSpacing') && _pixelSpacingRow > 0) {
+        _dicomTags['PixelSpacing'] = "${_pixelSpacingRow.toStringAsFixed(3)} мм/пиксель (автоматически)";
+        _tagControllers['PixelSpacing'] = TextEditingController(text: _dicomTags['PixelSpacing']!);
+        print("PixelSpacing автоматически добавлен при сохранении: ${_dicomTags['PixelSpacing']}");
+      }
 
       final dir = await getApplicationDocumentsDirectory();
       final metaDir = Directory('${dir.path}/dicom_metadata');
@@ -2721,6 +2773,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _dicomTags[key] = value;
             _tagControllers[key] = TextEditingController(text: value);
           });
+        }
+        
+        // Убеждаемся, что PixelSpacing есть в тегах после загрузки
+        // Если его нет, но есть pixel_spacing_row, добавляем его
+        if (!_dicomTags.containsKey('PixelSpacing') && data.containsKey('pixel_spacing_row')) {
+          final psValue = (data['pixel_spacing_row'] as num).toDouble();
+          _dicomTags['PixelSpacing'] = "${psValue.toStringAsFixed(3)} мм/пиксель (из сохраненных метаданных)";
+          _tagControllers['PixelSpacing'] = TextEditingController(text: _dicomTags['PixelSpacing']!);
+          print("PixelSpacing добавлен из сохраненных метаданных: ${_dicomTags['PixelSpacing']}");
+        }
+        
+        // Загружаем pixel_spacing_row для калибровки линеек
+        if (data.containsKey('pixel_spacing_row')) {
+          final loadedPixelSpacing = (data['pixel_spacing_row'] as num).toDouble();
+          // Обновляем калибровку всех линеек, если pixel_spacing изменился
+          if (_pixelSpacingRow != loadedPixelSpacing && _completedRulerLines.isNotEmpty) {
+            print("Обновление калибровки линеек при загрузке: старый=${_pixelSpacingRow}, новый=${loadedPixelSpacing}");
+            _completedRulerLines = _completedRulerLines.map((line) {
+              return RulerLine(
+                start: line.start,
+                end: line.end,
+                pixelSpacing: loadedPixelSpacing,
+              );
+            }).toList();
+          }
+          _pixelSpacingRow = loadedPixelSpacing;
+          print("Загружен pixel_spacing_row: $_pixelSpacingRow");
         }
         
         // Загружаем аннотации
@@ -2860,6 +2939,131 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       print("Ошибка при загрузке метаданных: $e");
       // Не показываем ошибку пользователю, так как это не критично
     }
+  }
+
+  void _showCalibrateRulerDialog(int rulerIndex) {
+    if (rulerIndex < 0 || rulerIndex >= _completedRulerLines.length) return;
+    
+    final line = _completedRulerLines[rulerIndex];
+    
+    // ВАЖНО: Используем размер изображения, а не размер canvas!
+    // Canvas может быть масштабирован через InteractiveViewer, поэтому его размер не соответствует размеру изображения
+    final imageSize = _decodedImage != null 
+        ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
+        : _getCanvasSize();
+    
+    // Вычисляем расстояние в пикселях изображения (не canvas!)
+    final pixelDistance = line.getDistance(imageSize);
+    
+    // Текущее значение в мм с текущим PixelSpacing
+    final currentRealDistanceMm = pixelDistance * line.pixelSpacing;
+    
+    print("Калибровка: pixelDistance=$pixelDistance px (размер изображения: ${imageSize.width}x${imageSize.height}), currentPixelSpacing=${line.pixelSpacing}, currentRealDistanceMm=$currentRealDistanceMm");
+    
+    final realSizeController = TextEditingController(
+      text: currentRealDistanceMm.toStringAsFixed(1),
+    );
+    
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Калибровка линейки'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Измеренное расстояние: ${pixelDistance.toStringAsFixed(1)} пикселей'),
+              Text('Текущее значение: ${currentRealDistanceMm.toStringAsFixed(2)} мм'),
+              const SizedBox(height: 16),
+              const Text('Введите реальный размер объекта (в мм):'),
+              const SizedBox(height: 8),
+              TextField(
+                controller: realSizeController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  hintText: 'Например: 60 (для 6 см)',
+                  border: OutlineInputBorder(),
+                ),
+                autofocus: true,
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'После калибровки все линейки будут пересчитаны с новым PixelSpacing',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Отмена'),
+            ),
+            TextButton(
+              onPressed: () {
+                final realSizeText = realSizeController.text.trim();
+                if (realSizeText.isNotEmpty) {
+                  final realSizeMm = double.tryParse(realSizeText);
+                  if (realSizeMm != null && realSizeMm > 0 && pixelDistance > 0) {
+                    // Вычисляем новый PixelSpacing
+                    // Формула: PixelSpacing (мм/пиксель) = Реальный размер (мм) / Пиксельное расстояние (пиксели)
+                    final newPixelSpacing = realSizeMm / pixelDistance;
+                    
+                    print("=== КАЛИБРОВКА ===");
+                    print("Введенный реальный размер: $realSizeMm мм");
+                    print("Пиксельное расстояние: $pixelDistance px");
+                    print("Вычисленный новый PixelSpacing: $newPixelSpacing мм/пиксель");
+                    print("Старый PixelSpacing: ${line.pixelSpacing} мм/пиксель");
+                    print("Размер изображения: ${imageSize.width}x${imageSize.height}");
+                    
+                    setState(() {
+                      // Обновляем PixelSpacing для всех линеек
+                      _pixelSpacingRow = newPixelSpacing;
+                      _completedRulerLines = _completedRulerLines.map((l) {
+                        return RulerLine(
+                          start: l.start,
+                          end: l.end,
+                          pixelSpacing: newPixelSpacing,
+                        );
+                      }).toList();
+                      
+                      // Обновляем тег PixelSpacing
+                      _dicomTags['PixelSpacing'] = "${newPixelSpacing.toStringAsFixed(3)} мм/пиксель (откалибровано вручную)";
+                      _tagControllers['PixelSpacing'] = TextEditingController(text: _dicomTags['PixelSpacing']!);
+                    });
+                    
+                    // Проверяем результат после калибровки
+                    final testLine = _completedRulerLines[rulerIndex];
+                    final testDistance = testLine.getDistance(imageSize);
+                    final testRealDistance = testDistance * newPixelSpacing;
+                    print("Проверка после калибровки:");
+                    print("  Пиксельное расстояние: $testDistance px");
+                    print("  Реальное расстояние: $testRealDistance мм (должно быть $realSizeMm мм)");
+                    print("==================");
+                    
+                    Navigator.of(ctx).pop();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Калибровка выполнена: PixelSpacing = ${newPixelSpacing.toStringAsFixed(3)} мм/пиксель'),
+                        duration: const Duration(seconds: 3),
+                      ),
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Введите корректное положительное число'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
+              },
+              child: const Text('Калибровать'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _showAddTagDialog() {
@@ -3400,7 +3604,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   padding: const EdgeInsets.all(8.0),
                                   child: Column(
                                     children: [
-                                      Text("W/L: ${_windowCenter?.round()}/${_windowWidth?.round()} | ${(_pixelSpacingRow * 100).toStringAsFixed(1)}% ${_isInverted ? '| Инвертировано' : ''} ${_rotationAngle != 0.0 ? '| Поворот: ${_rotationAngle.round()}°' : ''}",
+                                      Text("W/L: ${_windowCenter?.round()}/${_windowWidth?.round()} | PixelSpacing: ${_pixelSpacingRow.toStringAsFixed(3)} мм/px ${_isInverted ? '| Инвертировано' : ''} ${_rotationAngle != 0.0 ? '| Поворот: ${_rotationAngle.round()}°' : ''}",
                                           style: const TextStyle(color: Colors.white, fontSize: 16)),
                                       if (_currentTool == ToolMode.brightness) ...[
                                         const SizedBox(height: 10),
@@ -3743,6 +3947,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               behavior: HitTestBehavior.opaque,
                                               onTapDown: _handleTap,
                                               onTapUp: _handleTapUp,
+                                              onDoubleTap: () {
+                                                // Двойной клик на выбранную линейку открывает калибровку
+                                                if (_selectedRulerIndex != null) {
+                                                  _showCalibrateRulerDialog(_selectedRulerIndex!);
+                                                }
+                                              },
                                               onPanStart: _handlePanStart,
                                               onPanUpdate: _handlePanUpdate,
                                               onPanEnd: _handlePanEnd,
@@ -3986,7 +4196,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               thumbVisibility: true,
                                               child: ListView(
                                                 controller: _tagsScrollController,
-                                                children: _dicomTags.entries.map((e) {
+                                                children: () {
+                                                  final entries = _dicomTags.entries.toList();
+                                                  entries.sort((a, b) {
+                                                    // Сортируем: PixelSpacing и ImagerPixelSpacing в начало
+                                                    final aKey = a.key.toLowerCase();
+                                                    final bKey = b.key.toLowerCase();
+                                                    if (aKey == 'pixelspacing' || aKey == 'imagerpixelspacing') return -1;
+                                                    if (bKey == 'pixelspacing' || bKey == 'imagerpixelspacing') return 1;
+                                                    return a.key.compareTo(b.key);
+                                                  });
+                                                  return entries;
+                                                }().map((e) {
                                                   if (_editInfo) {
                                                     _tagControllers.putIfAbsent(e.key, () => TextEditingController(text: e.value));
                                                     return Padding(

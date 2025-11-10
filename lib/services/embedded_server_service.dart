@@ -174,11 +174,12 @@ def extract_basic_tags(ds):
     # Dimensions
     tags['Rows'] = _safe_str(getattr(ds, 'Rows', ''))
     tags['Columns'] = _safe_str(getattr(ds, 'Columns', ''))
-    # Pixel spacing
+    # Pixel spacing (будет перезаписан после вычисления с правильной логикой)
+    # Здесь оставляем базовое извлечение, но оно будет обновлено позже
     ps = getattr(ds, 'PixelSpacing', None)
     if ps is not None:
         try:
-            tags['PixelSpacing'] = f"{float(ps[0])} \\ {float(ps[1])}"
+            tags['PixelSpacing'] = f"{float(ps[0])} / {float(ps[1])}"
         except Exception:
             tags['PixelSpacing'] = _safe_str(ps)
     # Additional exposure info
@@ -266,13 +267,78 @@ def process_dicom_file(file_bytes, filename):
         
         # Получаем метаданные и теги
         patient_name = str(ds.get('PatientName', 'Unknown'))
-        pixel_spacing = ds.get('PixelSpacing', [1.0, 1.0])
-        pixel_spacing_row = float(pixel_spacing[0]) if pixel_spacing else 1.0
+        
+        # Извлекаем PixelSpacing с улучшенной логикой
+        pixel_spacing = None
+        pixel_spacing_source = "не найден"
+        
+        # 1. Проверяем стандартный PixelSpacing (0028,0030)
+        if hasattr(ds, 'PixelSpacing') and ds.PixelSpacing is not None:
+            try:
+                ps = ds.PixelSpacing
+                if hasattr(ps, '__len__') and len(ps) >= 2:
+                    pixel_spacing = [float(ps[0]), float(ps[1])]
+                    pixel_spacing_source = "из PixelSpacing"
+                    print(f"PixelSpacing найден в файле: {pixel_spacing} мм")
+            except Exception as e:
+                print(f"Ошибка при извлечении PixelSpacing: {e}")
+        
+        # 2. Если PixelSpacing отсутствует или равен 1.0, проверяем ImagerPixelSpacing (0018,1164)
+        if pixel_spacing is None or (pixel_spacing is not None and len(pixel_spacing) >= 2 and pixel_spacing[0] == 1.0 and pixel_spacing[1] == 1.0):
+            if hasattr(ds, 'ImagerPixelSpacing') and ds.ImagerPixelSpacing is not None:
+                try:
+                    ips = ds.ImagerPixelSpacing
+                    if hasattr(ips, '__len__') and len(ips) >= 2:
+                        pixel_spacing = [float(ips[0]), float(ips[1])]
+                        pixel_spacing_source = "из ImagerPixelSpacing"
+                        print(f"ImagerPixelSpacing найден в файле: {pixel_spacing} мм")
+                except Exception as e:
+                    print(f"Ошибка при извлечении ImagerPixelSpacing: {e}")
+        
+        # 3. Если все еще нет, используем значение по умолчанию
+        if pixel_spacing is None or len(pixel_spacing) < 2:
+            pixel_spacing = [1.0, 1.0]
+            pixel_spacing_source = "по умолчанию (тег отсутствует в файле)"
+            print("Предупреждение: PixelSpacing не найден в DICOM файле, используется значение по умолчанию 1.0 мм")
+        
+        # Убеждаемся, что значения в мм (если они подозрительно маленькие, возможно они в см)
+        if pixel_spacing[0] < 0.5 and pixel_spacing[0] > 0.01:
+            print(f"Предупреждение: PixelSpacing подозрительно маленький ({pixel_spacing[0]}), возможно указан в см. Конвертируем в мм (x10).")
+            pixel_spacing[0] = pixel_spacing[0] * 10.0
+            if len(pixel_spacing) > 1 and pixel_spacing[1] < 0.5 and pixel_spacing[1] > 0.01:
+                pixel_spacing[1] = pixel_spacing[1] * 10.0
+        
+        pixel_spacing_row = float(pixel_spacing[0])
+        pixel_spacing_col = float(pixel_spacing[1]) if len(pixel_spacing) > 1 else pixel_spacing_row
+        
+        print(f"Используемый PixelSpacing для калибровки: {pixel_spacing_row} мм/пиксель (row), {pixel_spacing_col} мм/пиксель (col)")
+        
         tags = extract_basic_tags(ds)
         report = extract_report(ds)
         
+        # Всегда добавляем/обновляем PixelSpacing в теги для отображения
+        # Используем вычисленное значение (может быть из PixelSpacing, ImagerPixelSpacing или по умолчанию)
+        # Добавляем пометку об источнике значения
+        if pixel_spacing_source == "по умолчанию (тег отсутствует в файле)":
+            tags['PixelSpacing'] = f"{pixel_spacing_row:.3f} / {pixel_spacing_col:.3f} мм (по умолчанию, тег отсутствует)"
+        else:
+            tags['PixelSpacing'] = f"{pixel_spacing_row:.3f} / {pixel_spacing_col:.3f} мм ({pixel_spacing_source})"
+        
+        # Также добавляем ImagerPixelSpacing, если он был использован
+        if hasattr(ds, 'ImagerPixelSpacing') and ds.ImagerPixelSpacing is not None:
+            try:
+                ips = ds.ImagerPixelSpacing
+                if hasattr(ips, '__len__') and len(ips) >= 2:
+                    tags['ImagerPixelSpacing'] = f"{float(ips[0]):.3f} / {float(ips[1]):.3f} мм"
+            except Exception:
+                pass
+        
         # Удаляем временный файл
         os.remove(temp_path)
+        
+        # Отладочный вывод тегов
+        print(f"Теги для отправки клиенту: {list(tags.keys())}")
+        print(f"PixelSpacing в тегах: {tags.get('PixelSpacing', 'НЕ НАЙДЕН')}")
         
         return {
             'image_base64': image_base64,
@@ -308,6 +374,16 @@ def process_dicom():
         if result is None:
             return jsonify({"error": "Failed to process DICOM file"}), 500
         
+        # Убеждаемся, что теги есть и PixelSpacing присутствует
+        if 'tags' not in result or not isinstance(result['tags'], dict):
+            result['tags'] = {}
+        
+        # Принудительно добавляем PixelSpacing, если его нет
+        if 'PixelSpacing' not in result['tags'] and 'pixel_spacing_row' in result:
+            result['tags']['PixelSpacing'] = f"{result['pixel_spacing_row']:.3f} мм/пиксель"
+            print("PixelSpacing принудительно добавлен в теги")
+        
+        print(f"Отправляем результат с тегами: {list(result.get('tags', {}).keys())}")
         return jsonify(result)
         
     except Exception as e:
