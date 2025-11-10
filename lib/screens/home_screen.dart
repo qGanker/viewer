@@ -195,27 +195,40 @@ class AnnotationPainter extends CustomPainter {
 }
 
 // Класс для хранения одной линии линейки
+// Координаты хранятся в относительных координатах (0.0-1.0) для независимости от размера окна
 class RulerLine {
-  final Offset start;
-  final Offset end;
+  final Offset start;  // Относительные координаты (0.0-1.0)
+  final Offset end;    // Относительные координаты (0.0-1.0)
   final double pixelSpacing;
   
   RulerLine({required this.start, required this.end, required this.pixelSpacing});
   
-  double get distance {
-    return (end - start).distance;
+  // Преобразует относительные координаты в абсолютные для заданного размера
+  Offset getAbsoluteStart(Size size) {
+    return Offset(start.dx * size.width, start.dy * size.height);
   }
   
-  double get realDistanceMm {
-    return distance * pixelSpacing;
+  Offset getAbsoluteEnd(Size size) {
+    return Offset(end.dx * size.width, end.dy * size.height);
+  }
+  
+  double getDistance(Size size) {
+    final absStart = getAbsoluteStart(size);
+    final absEnd = getAbsoluteEnd(size);
+    return (absEnd - absStart).distance;
+  }
+  
+  double getRealDistanceMm(Size size) {
+    return getDistance(size) * pixelSpacing;
   }
 }
 
 // Класс для хранения одного измерения угла
+// Координаты хранятся в относительных координатах (0.0-1.0) для независимости от размера окна
 class AngleMeasurement {
-  final Offset vertex;  // Вершина угла
-  final Offset point1;  // Первая точка на первом луче
-  final Offset point2;  // Вторая точка на втором луче
+  final Offset vertex;  // Вершина угла (относительные координаты 0.0-1.0)
+  final Offset point1;  // Первая точка на первом луче (относительные координаты 0.0-1.0)
+  final Offset point2;  // Вторая точка на втором луче (относительные координаты 0.0-1.0)
   
   AngleMeasurement({
     required this.vertex,
@@ -223,11 +236,28 @@ class AngleMeasurement {
     required this.point2,
   });
   
-  // Вычисление угла в градусах
-  double get angleDegrees {
+  // Преобразует относительные координаты в абсолютные для заданного размера
+  Offset getAbsoluteVertex(Size size) {
+    return Offset(vertex.dx * size.width, vertex.dy * size.height);
+  }
+  
+  Offset getAbsolutePoint1(Size size) {
+    return Offset(point1.dx * size.width, point1.dy * size.height);
+  }
+  
+  Offset getAbsolutePoint2(Size size) {
+    return Offset(point2.dx * size.width, point2.dy * size.height);
+  }
+  
+  // Вычисление угла в градусах для заданного размера
+  double getAngleDegrees(Size size) {
+    final v = getAbsoluteVertex(size);
+    final p1 = getAbsolutePoint1(size);
+    final p2 = getAbsolutePoint2(size);
+    
     // Векторы от вершины к точкам
-    final v1 = point1 - vertex;
-    final v2 = point2 - vertex;
+    final v1 = p1 - v;
+    final v2 = p2 - v;
     
     // Вычисляем угол между векторами
     final dot = v1.dx * v2.dx + v1.dy * v2.dy;
@@ -247,41 +277,58 @@ class AngleMeasurement {
 
 // Класс для рисования линейки
 class RulerPainter extends CustomPainter {
-  final List<Offset> currentPoints; // Текущие точки для рисования
-  final List<RulerLine> completedLines; // Завершенные линии
+  final List<Offset> currentPoints; // Текущие точки для рисования (в scene coordinates)
+  final List<RulerLine> completedLines; // Завершенные линии (в относительных координатах)
   final double pixelSpacing;
+  final int? selectedIndex; // Индекс выбранной линии
+  final Size? imageSize; // Размер исходного изображения для нормализации
   
   RulerPainter({
     required this.currentPoints, 
     required this.completedLines,
-    required this.pixelSpacing
+    required this.pixelSpacing,
+    this.selectedIndex,
+    this.imageSize,
   });
   @override
   void paint(Canvas canvas, Size size) {
     try {
-      final paint = Paint()..color = Colors.yellow..strokeWidth = 2..style = PaintingStyle.stroke;
-      final fillPaint = Paint()..color = Colors.yellow..style = PaintingStyle.fill;
-      
       // Проверяем корректность pixelSpacing
       final safePixelSpacing = pixelSpacing.isFinite && pixelSpacing > 0 ? pixelSpacing : 1.0;
     
       // Рисуем все завершенные линии
+      // Важно: используем размер canvas для отрисовки, так как scene coordinates зависят от размера canvas
+      // Относительные координаты (0.0-1.0) преобразуются в абсолютные используя размер canvas
       for (int i = 0; i < completedLines.length; i++) {
         final line = completedLines[i];
-        _drawRulerLine(canvas, line.start, line.end, safePixelSpacing, paint, fillPaint, i + 1);
+        final isSelected = selectedIndex == i;
+        final color = isSelected ? Colors.orange : Colors.yellow;
+        final paint = Paint()..color = color..strokeWidth = 1.0..style = PaintingStyle.stroke;
+        final fillPaint = Paint()..color = color..style = PaintingStyle.fill;
+        // Преобразуем относительные координаты в абсолютные используя размер canvas
+        // Это гарантирует, что координаты останутся на месте при изменении размера окна
+        final absStart = line.getAbsoluteStart(size);
+        final absEnd = line.getAbsoluteEnd(size);
+        // Для вычисления расстояния используем размер изображения, если он доступен
+        final distanceSize = imageSize ?? size;
+        _drawRulerLine(canvas, absStart, absEnd, safePixelSpacing, paint, fillPaint, i + 1, isSelected, line, distanceSize);
       }
       
       // Рисуем текущие точки и линию (если есть)
       if (currentPoints.isNotEmpty) {
+        // Объявляем paint и fillPaint для текущих точек
+        final paint = Paint()..color = Colors.yellow..strokeWidth = 1.0..style = PaintingStyle.stroke;
+        final fillPaint = Paint()..color = Colors.yellow..style = PaintingStyle.fill;
+        
         // Рисуем точки
         for (var point in currentPoints) { 
-          canvas.drawCircle(point, 6, fillPaint);
-          canvas.drawCircle(point, 6, paint..color = Colors.black);
+          canvas.drawCircle(point, 3, fillPaint);
+          canvas.drawCircle(point, 3, paint..color = Colors.black);
         }
         
         // Рисуем линию и измерения
         if (currentPoints.length > 1) {
-          _drawRulerLine(canvas, currentPoints[0], currentPoints[1], safePixelSpacing, paint, fillPaint, completedLines.length + 1);
+          _drawRulerLine(canvas, currentPoints[0], currentPoints[1], safePixelSpacing, paint, fillPaint, completedLines.length + 1, false, null, size);
         }
       }
     } catch (e) {
@@ -290,9 +337,9 @@ class RulerPainter extends CustomPainter {
     }
   }
   
-  void _drawRulerLine(Canvas canvas, Offset start, Offset end, double safePixelSpacing, Paint paint, Paint fillPaint, int lineNumber) {
-    // Основная линия
-    canvas.drawLine(start, end, paint..strokeWidth = 3);
+  void _drawRulerLine(Canvas canvas, Offset start, Offset end, double safePixelSpacing, Paint paint, Paint fillPaint, int lineNumber, bool isSelected, RulerLine? line, Size size) {
+    // Основная линия (тонкая)
+    canvas.drawLine(start, end, paint);
     
     // Перпендикулярные линии на концах для точности
     final dx = end.dx - start.dx;
@@ -301,24 +348,24 @@ class RulerPainter extends CustomPainter {
     
     if (length > 0) {
       // Нормализованный перпендикулярный вектор
-      final perpX = -dy / length * 10;
-      final perpY = dx / length * 10;
+      final perpX = -dy / length * 8;
+      final perpY = dx / length * 8;
       
-      // Рисуем перпендикулярные линии
+      // Рисуем перпендикулярные линии (тонкие)
       canvas.drawLine(
         Offset(start.dx - perpX, start.dy - perpY),
         Offset(start.dx + perpX, start.dy + perpY),
-        paint..strokeWidth = 2
+        paint
       );
       canvas.drawLine(
         Offset(end.dx - perpX, end.dy - perpY),
         Offset(end.dx + perpX, end.dy + perpY),
-        paint..strokeWidth = 2
+        paint
       );
     }
     
     // Вычисляем расстояние
-    final pixelDistance = (end - start).distance;
+    final pixelDistance = line != null ? line.getDistance(size) : (end - start).distance;
     final realDistanceMm = pixelDistance * safePixelSpacing;
     
     // Рисуем текст с расстоянием и номером линии
@@ -361,43 +408,62 @@ class RulerPainter extends CustomPainter {
 
 // Класс для рисования углов
 class AnglePainter extends CustomPainter {
-  final List<Offset> currentPoints; // Текущие точки для рисования (0-3 точки)
-  final List<AngleMeasurement> completedAngles; // Завершенные измерения углов
+  final List<Offset> currentPoints; // Текущие точки для рисования (0-3 точки, в scene coordinates)
+  final List<AngleMeasurement> completedAngles; // Завершенные измерения углов (в относительных координатах)
+  final int? selectedIndex; // Индекс выбранного угла
+  final Size? imageSize; // Размер исходного изображения для нормализации
   
   AnglePainter({
     required this.currentPoints,
     required this.completedAngles,
+    this.selectedIndex,
+    this.imageSize,
   });
   
   @override
   void paint(Canvas canvas, Size size) {
     try {
-      final paint = Paint()..color = Colors.cyan..strokeWidth = 2..style = PaintingStyle.stroke;
-      final fillPaint = Paint()..color = Colors.cyan..style = PaintingStyle.fill;
-      
+      // Важно: используем размер canvas для отрисовки, так как scene coordinates зависят от размера canvas
+      // Относительные координаты (0.0-1.0) преобразуются в абсолютные используя размер canvas
       // Рисуем все завершенные углы
       for (int i = 0; i < completedAngles.length; i++) {
         final angle = completedAngles[i];
-        _drawAngle(canvas, angle.vertex, angle.point1, angle.point2, paint, fillPaint, i + 1, angle.angleDegrees);
+        final isSelected = selectedIndex == i;
+        final color = isSelected ? Colors.orange : Colors.cyan;
+        final paint = Paint()..color = color..strokeWidth = 1.0..style = PaintingStyle.stroke;
+        final fillPaint = Paint()..color = color..style = PaintingStyle.fill;
+        // Преобразуем относительные координаты в абсолютные используя размер canvas
+        // Это гарантирует, что координаты останутся на месте при изменении размера окна
+        final absVertex = angle.getAbsoluteVertex(size);
+        final absPoint1 = angle.getAbsolutePoint1(size);
+        final absPoint2 = angle.getAbsolutePoint2(size);
+        // Для вычисления угла используем размер изображения, если он доступен
+        final angleSize = imageSize ?? size;
+        final angleDeg = angle.getAngleDegrees(angleSize);
+        _drawAngle(canvas, absVertex, absPoint1, absPoint2, paint, fillPaint, i + 1, angleDeg, isSelected);
       }
       
       // Рисуем текущие точки и углы (если есть)
       if (currentPoints.isNotEmpty) {
+        // Объявляем paint и fillPaint для текущих точек
+        final paint = Paint()..color = Colors.cyan..strokeWidth = 1.0..style = PaintingStyle.stroke;
+        final fillPaint = Paint()..color = Colors.cyan..style = PaintingStyle.fill;
+        
         // Рисуем точки
         for (var point in currentPoints) {
-          canvas.drawCircle(point, 6, fillPaint);
-          canvas.drawCircle(point, 6, paint..color = Colors.black);
+          canvas.drawCircle(point, 3, fillPaint);
+          canvas.drawCircle(point, 3, paint..color = Colors.black);
         }
         
         // Рисуем предварительный просмотр угла
         if (currentPoints.length == 2) {
-          // Рисуем линию от первой точки (вершина) ко второй
+          // Рисуем линию от первой точки ко второй (вершине)
           canvas.drawLine(currentPoints[0], currentPoints[1], paint);
         } else if (currentPoints.length == 3) {
           // Рисуем полный угол
-          final vertex = currentPoints[0];
-          final point1 = currentPoints[1];
-          final point2 = currentPoints[2];
+          final vertex = currentPoints[1]; // Вершина - вторая точка
+          final point1 = currentPoints[0]; // Первая точка на первом луче
+          final point2 = currentPoints[2]; // Третья точка на втором луче
           
           // Вычисляем угол для предварительного просмотра
           final v1 = point1 - vertex;
@@ -411,7 +477,7 @@ class AnglePainter extends CustomPainter {
             angleDeg = acos(cosAngle) * 180 / pi;
           }
           
-          _drawAngle(canvas, vertex, point1, point2, paint, fillPaint, completedAngles.length + 1, angleDeg);
+          _drawAngle(canvas, vertex, point1, point2, paint, fillPaint, completedAngles.length + 1, angleDeg, false);
         }
       }
     } catch (e) {
@@ -419,10 +485,10 @@ class AnglePainter extends CustomPainter {
     }
   }
   
-  void _drawAngle(Canvas canvas, Offset vertex, Offset point1, Offset point2, Paint paint, Paint fillPaint, int angleNumber, double angleDegrees) {
-    // Рисуем два луча от вершины
-    canvas.drawLine(vertex, point1, paint..strokeWidth = 3);
-    canvas.drawLine(vertex, point2, paint..strokeWidth = 3);
+  void _drawAngle(Canvas canvas, Offset vertex, Offset point1, Offset point2, Paint paint, Paint fillPaint, int angleNumber, double angleDegrees, bool isSelected) {
+    // Рисуем два луча от вершины (тонкие)
+    canvas.drawLine(vertex, point1, paint);
+    canvas.drawLine(vertex, point2, paint);
     
     // Рисуем дугу угла
     final v1 = point1 - vertex;
@@ -438,20 +504,20 @@ class AnglePainter extends CustomPainter {
       // Радиус дуги (30 пикселей или меньше, если лучи короткие)
       final arcRadius = min(30.0, min(mag1, mag2) * 0.3);
       
-      // Рисуем дугу
+      // Рисуем дугу (тонкая)
       final rect = Rect.fromCircle(center: vertex, radius: arcRadius);
       canvas.drawArc(
         rect,
         angle1,
         angle2 - angle1,
         false,
-        paint..strokeWidth = 2,
+        paint,
       );
     }
     
-    // Рисуем вершину угла более заметно
-    canvas.drawCircle(vertex, 8, fillPaint);
-    canvas.drawCircle(vertex, 8, paint..color = Colors.black..strokeWidth = 2);
+    // Рисуем вершину угла (меньше размер для тонкого дизайна)
+    canvas.drawCircle(vertex, 5, fillPaint);
+    canvas.drawCircle(vertex, 5, Paint()..color = Colors.black..strokeWidth = 1.0);
     
     // Рисуем текст с углом
     final textPainter = TextPainter(
@@ -819,7 +885,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Uint8List? _imageBytes;
   String? _patientName;
   bool _isLoading = false;
@@ -846,6 +912,13 @@ class _HomeScreenState extends State<HomeScreen> {
   
   // Угол: все завершенные измерения (∠1, ∠2, ∠3...)
   List<AngleMeasurement> _completedAngles = [];
+  
+  // Выделение и перетаскивание
+  int? _selectedRulerIndex; // Индекс выбранной линейки
+  int? _selectedAngleIndex; // Индекс выбранного угла
+  bool _isDraggingRuler = false; // Флаг перетаскивания линейки
+  bool _isDraggingAngle = false; // Флаг перетаскивания угла
+  Offset? _dragOffset; // Смещение при перетаскивании
   
   // Лупа: позиция курсора для отображения увеличенной области
   Offset? _magnifierPosition;
@@ -881,6 +954,8 @@ class _HomeScreenState extends State<HomeScreen> {
   double _brightness = 1.0;
   // Ключ для захвата экрана (PNG)
   final GlobalKey _captureKey = GlobalKey();
+  // Ключ для получения размера canvas
+  final GlobalKey _canvasSizeKey = GlobalKey();
   double _initialBrightness = 1.0;
   
   // Переменные для инверсии
@@ -1005,6 +1080,11 @@ class _HomeScreenState extends State<HomeScreen> {
       _lastTapPosition = null;
       _magnifierPosition = null; // Очищаем позицию лупы
       _isMagnifierPressed = false; // Сбрасываем флаг зажатой ЛКМ
+      _selectedRulerIndex = null; // Сбрасываем выделение линеек
+      _selectedAngleIndex = null; // Сбрасываем выделение углов
+      _isDraggingRuler = false;
+      _isDraggingAngle = false;
+      _dragOffset = null;
       
       // Переключаем инструмент
       _currentTool = newTool;
@@ -1065,8 +1145,20 @@ class _HomeScreenState extends State<HomeScreen> {
     _transformationController.addListener(() {
       _matrixCacheValid = false;
     });
+    
+    // Слушаем изменения размера окна
+    WidgetsBinding.instance.addObserver(this);
   }
-
+  
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    // Инвалидируем кэш матрицы при изменении размера окна
+    setState(() {
+      _matrixCacheValid = false;
+    });
+  }
+  
   Future<void> _initializeHotkeys() async {
     await HotkeyService.initialize();
   }
@@ -1264,6 +1356,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 
                 print("Все данные успешно установлены");
               });
+              
+              // Загружаем сохраненные метаданные, если они есть
+              await _loadMetadata();
             } catch (decodeError) {
               print("Ошибка при декодировании изображения: $decodeError");
               setState(() { 
@@ -1295,6 +1390,104 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
 
+  // Преобразует scene coordinates в относительные координаты (0.0-1.0)
+  // Использует размер canvas для нормализации
+  Offset _sceneToRelativeCoordinates(Offset scenePoint, Size canvasSize) {
+    if (canvasSize.width <= 0 || canvasSize.height <= 0) return Offset.zero;
+    return Offset(
+      scenePoint.dx / canvasSize.width,
+      scenePoint.dy / canvasSize.height,
+    );
+  }
+  
+  // Преобразует относительные координаты (0.0-1.0) в scene coordinates
+  Offset _relativeToSceneCoordinates(Offset relativePoint, Size canvasSize) {
+    return Offset(
+      relativePoint.dx * canvasSize.width,
+      relativePoint.dy * canvasSize.height,
+    );
+  }
+  
+  // Получает размер canvas для измерений
+  // Используем реальный размер canvas для нормализации координат
+  // Это гарантирует, что координаты останутся на месте при изменении размера окна
+  Size _getCanvasSize() {
+    // Пытаемся получить размер canvas из RenderBox
+    final renderBox = _canvasSizeKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox != null && renderBox.hasSize) {
+      return renderBox.size;
+    }
+    // Если не удалось получить размер canvas, используем размер изображения как fallback
+    if (_decodedImage != null) {
+      return Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble());
+    }
+    // Если изображение не загружено, используем размер по умолчанию
+    return const Size(1000, 1000);
+  }
+
+  // Проверяет, находится ли точка рядом с линией
+  // point в scene coordinates
+  int? _getRulerLineAtPoint(Offset point, double threshold) {
+    final canvasSize = _getCanvasSize();
+    for (int i = 0; i < _completedRulerLines.length; i++) {
+      final line = _completedRulerLines[i];
+      // Преобразуем относительные координаты в scene coordinates
+      final absStart = line.getAbsoluteStart(canvasSize);
+      final absEnd = line.getAbsoluteEnd(canvasSize);
+      final distance = _pointToLineDistance(point, absStart, absEnd);
+      if (distance <= threshold) {
+        return i;
+      }
+    }
+    return null;
+  }
+  
+  // Проверяет, находится ли точка рядом с углом
+  // point в scene coordinates
+  int? _getAngleAtPoint(Offset point, double threshold) {
+    final canvasSize = _getCanvasSize();
+    for (int i = 0; i < _completedAngles.length; i++) {
+      final angle = _completedAngles[i];
+      // Преобразуем относительные координаты в scene coordinates
+      final absVertex = angle.getAbsoluteVertex(canvasSize);
+      final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+      final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+      // Проверяем расстояние до лучей и вершины
+      final distToRay1 = _pointToLineDistance(point, absVertex, absPoint1);
+      final distToRay2 = _pointToLineDistance(point, absVertex, absPoint2);
+      final distToVertex = (point - absVertex).distance;
+      if (distToRay1 <= threshold || distToRay2 <= threshold || distToVertex <= threshold * 2) {
+        return i;
+      }
+    }
+    return null;
+  }
+  
+  // Вычисляет расстояние от точки до линии
+  double _pointToLineDistance(Offset point, Offset lineStart, Offset lineEnd) {
+    final A = point.dx - lineStart.dx;
+    final B = point.dy - lineStart.dy;
+    final C = lineEnd.dx - lineStart.dx;
+    final D = lineEnd.dy - lineStart.dy;
+    
+    final dot = A * C + B * D;
+    final lenSq = C * C + D * D;
+    if (lenSq == 0) return (point - lineStart).distance;
+    
+    final param = dot / lenSq;
+    
+    Offset closest;
+    if (param < 0) {
+      closest = lineStart;
+    } else if (param > 1) {
+      closest = lineEnd;
+    } else {
+      closest = Offset(lineStart.dx + param * C, lineStart.dy + param * D);
+    }
+    
+    return (point - closest).distance;
+  }
+
   void _handleTap(TapDownDetails details) {
     // Получаем координаты клика в системе изображения
     if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
@@ -1302,6 +1495,37 @@ class _HomeScreenState extends State<HomeScreen> {
       _matrixCacheValid = true;
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
+    
+    // Проверяем клик на существующие линии/углы (если не в режиме создания)
+    if (_currentTool == ToolMode.ruler && _rulerPoints.isEmpty) {
+      final rulerIndex = _getRulerLineAtPoint(sceneOffset, 10.0);
+      if (rulerIndex != null) {
+        setState(() {
+          _selectedRulerIndex = _selectedRulerIndex == rulerIndex ? null : rulerIndex;
+          _selectedAngleIndex = null; // Снимаем выделение с углов
+        });
+        return;
+      } else {
+        setState(() {
+          _selectedRulerIndex = null;
+        });
+      }
+    }
+    
+    if (_currentTool == ToolMode.angle && _anglePoints.isEmpty) {
+      final angleIndex = _getAngleAtPoint(sceneOffset, 10.0);
+      if (angleIndex != null) {
+        setState(() {
+          _selectedAngleIndex = _selectedAngleIndex == angleIndex ? null : angleIndex;
+          _selectedRulerIndex = null; // Снимаем выделение с линеек
+        });
+        return;
+      } else {
+        setState(() {
+          _selectedAngleIndex = null;
+        });
+      }
+    }
     
     // Обрабатываем клик для инструмента угла
     if (_currentTool == ToolMode.angle) {
@@ -1318,14 +1542,15 @@ class _HomeScreenState extends State<HomeScreen> {
           // Третий клик - устанавливаем третью точку на втором луче и завершаем измерение
           // Угол измеряется между точками 1 и 3, с вершиной в точке 2
           _anglePoints.add(sceneOffset);
+          final canvasSize = _getCanvasSize();
           final completedAngle = AngleMeasurement(
-            vertex: _anglePoints[1],  // Вершина угла - вторая точка
-            point1: _anglePoints[0],   // Первая точка на первом луче
-            point2: _anglePoints[2],  // Третья точка на втором луче
+            vertex: _sceneToRelativeCoordinates(_anglePoints[1], canvasSize),  // Вершина угла - вторая точка
+            point1: _sceneToRelativeCoordinates(_anglePoints[0], canvasSize),   // Первая точка на первом луче
+            point2: _sceneToRelativeCoordinates(_anglePoints[2], canvasSize),  // Третья точка на втором луче
           );
           _completedAngles = List.of(_completedAngles)..add(completedAngle);
           _addToHistory(ActionType.angleAdded, null);
-          print("Угол: завершено измерение, угол = ${completedAngle.angleDegrees.toStringAsFixed(1)}°");
+          print("Угол: завершено измерение, угол = ${completedAngle.getAngleDegrees(canvasSize).toStringAsFixed(1)}°");
           // Очищаем точки для следующего измерения
           _anglePoints = [];
         } else {
@@ -1348,9 +1573,10 @@ class _HomeScreenState extends State<HomeScreen> {
         // Режим добавления сегментов при зажатом Ctrl
         if (_rulerPoints.length == 1) {
           // Завершаем текущую линию из точки-анкера в новую точку
+          final canvasSize = _getCanvasSize();
           final completedLine = RulerLine(
-            start: _rulerPoints[0],
-            end: sceneOffset,
+            start: _sceneToRelativeCoordinates(_rulerPoints[0], canvasSize),
+            end: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
             pixelSpacing: _pixelSpacingRow,
           );
           _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
@@ -1379,9 +1605,10 @@ class _HomeScreenState extends State<HomeScreen> {
           print("Линейка: добавлена первая точка");
         } else if (_rulerPoints.length == 1) {
           // Завершаем линию
+          final canvasSize = _getCanvasSize();
           final completedLine = RulerLine(
-            start: _rulerPoints[0],
-            end: sceneOffset,
+            start: _sceneToRelativeCoordinates(_rulerPoints[0], canvasSize),
+            end: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
             pixelSpacing: _pixelSpacingRow,
           );
           _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
@@ -1466,14 +1693,120 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _handlePanStart(DragStartDetails details) {
-    if (_currentTool != ToolMode.annotation) return;
-    
     // Используем кэшированную матрицу для производительности
     if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
       _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
       _matrixCacheValid = true;
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
+    
+    // Если не создаются новые измерения, проверяем возможность перетаскивания существующих
+    // Перетаскивание работает в любом режиме инструмента, кроме режима создания новых измерений
+    if (_rulerPoints.isEmpty && _anglePoints.isEmpty) {
+      // Сначала проверяем перетаскивание линеек (даже если не выбраны)
+      // Если линейка уже выбрана, проверяем её
+      if (_selectedRulerIndex != null) {
+        final canvasSize = _getCanvasSize();
+        final line = _completedRulerLines[_selectedRulerIndex!];
+        final absStart = line.getAbsoluteStart(canvasSize);
+        final absEnd = line.getAbsoluteEnd(canvasSize);
+        final distToLine = _pointToLineDistance(sceneOffset, absStart, absEnd);
+        if (distToLine <= 15.0) {
+          setState(() {
+            _isDraggingRuler = true;
+            _dragOffset = sceneOffset;
+          });
+          return;
+        }
+      }
+      
+      // Ищем ближайшую линейку, если ничего не выбрано
+      final rulerIndex = _getRulerLineAtPoint(sceneOffset, 15.0);
+      if (rulerIndex != null) {
+        setState(() {
+          _selectedRulerIndex = rulerIndex;
+          _selectedAngleIndex = null;
+          _isDraggingRuler = true;
+          _dragOffset = sceneOffset;
+        });
+        return;
+      }
+      
+      // Проверяем перетаскивание углов (даже если не выбраны)
+      // Если угол уже выбран, проверяем его
+      if (_selectedAngleIndex != null) {
+        final canvasSize = _getCanvasSize();
+        final angle = _completedAngles[_selectedAngleIndex!];
+        final absVertex = angle.getAbsoluteVertex(canvasSize);
+        final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+        final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+        final distToVertex = (sceneOffset - absVertex).distance;
+        final distToPoint1 = (sceneOffset - absPoint1).distance;
+        final distToPoint2 = (sceneOffset - absPoint2).distance;
+        final distToRay1 = _pointToLineDistance(sceneOffset, absVertex, absPoint1);
+        final distToRay2 = _pointToLineDistance(sceneOffset, absVertex, absPoint2);
+        
+        if (distToVertex <= 20.0 || distToPoint1 <= 20.0 || distToPoint2 <= 20.0 || 
+            distToRay1 <= 15.0 || distToRay2 <= 15.0) {
+          setState(() {
+            _isDraggingAngle = true;
+            _dragOffset = sceneOffset;
+          });
+          return;
+        }
+      }
+      
+      // Ищем ближайший угол, если ничего не выбрано
+      final angleIndex = _getAngleAtPoint(sceneOffset, 15.0);
+      if (angleIndex != null) {
+        setState(() {
+          _selectedAngleIndex = angleIndex;
+          _selectedRulerIndex = null;
+          _isDraggingAngle = true;
+          _dragOffset = sceneOffset;
+        });
+        return;
+      }
+    }
+    
+    // Проверяем перетаскивание линеек (старая логика для обратной совместимости)
+    if (_currentTool == ToolMode.ruler && _selectedRulerIndex != null && _rulerPoints.isEmpty) {
+      final canvasSize = _getCanvasSize();
+      final line = _completedRulerLines[_selectedRulerIndex!];
+      final absStart = line.getAbsoluteStart(canvasSize);
+      final absEnd = line.getAbsoluteEnd(canvasSize);
+      final distToLine = _pointToLineDistance(sceneOffset, absStart, absEnd);
+      
+      if (distToLine <= 10.0) {
+        setState(() {
+          _isDraggingRuler = true;
+          _dragOffset = sceneOffset;
+        });
+        return;
+      }
+    }
+    
+    // Проверяем перетаскивание углов (старая логика для обратной совместимости)
+    if (_currentTool == ToolMode.angle && _selectedAngleIndex != null && _anglePoints.isEmpty) {
+      final canvasSize = _getCanvasSize();
+      final angle = _completedAngles[_selectedAngleIndex!];
+      final absVertex = angle.getAbsoluteVertex(canvasSize);
+      final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+      final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+      final distToVertex = (sceneOffset - absVertex).distance;
+      final distToPoint1 = (sceneOffset - absPoint1).distance;
+      final distToPoint2 = (sceneOffset - absPoint2).distance;
+      
+      if (distToVertex <= 15.0 || distToPoint1 <= 15.0 || distToPoint2 <= 15.0) {
+        setState(() {
+          _isDraggingAngle = true;
+          _dragOffset = sceneOffset;
+        });
+        return;
+      }
+    }
+    
+    if (_currentTool != ToolMode.annotation) return;
     
     setState(() {
       _isDragging = true; // Устанавливаем флаг перетаскивания
@@ -1483,14 +1816,56 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _handlePanUpdate(DragUpdateDetails details) {
-    if (_currentTool != ToolMode.annotation) return;
-    
     // Используем кэшированную матрицу для производительности
     if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
       _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
       _matrixCacheValid = true;
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
+    
+    // Обрабатываем перетаскивание линеек
+    if (_isDraggingRuler && _selectedRulerIndex != null && _dragOffset != null) {
+      final canvasSize = _getCanvasSize();
+      // Преобразуем delta из scene coordinates в относительные координаты
+      final deltaScene = sceneOffset - _dragOffset!;
+      final deltaRelative = Offset(
+        deltaScene.dx / canvasSize.width,
+        deltaScene.dy / canvasSize.height,
+      );
+      setState(() {
+        final line = _completedRulerLines[_selectedRulerIndex!];
+        _completedRulerLines[_selectedRulerIndex!] = RulerLine(
+          start: Offset(line.start.dx + deltaRelative.dx, line.start.dy + deltaRelative.dy),
+          end: Offset(line.end.dx + deltaRelative.dx, line.end.dy + deltaRelative.dy),
+          pixelSpacing: line.pixelSpacing,
+        );
+        _dragOffset = sceneOffset;
+      });
+      return;
+    }
+    
+    // Обрабатываем перетаскивание углов
+    if (_isDraggingAngle && _selectedAngleIndex != null && _dragOffset != null) {
+      final canvasSize = _getCanvasSize();
+      // Преобразуем delta из scene coordinates в относительные координаты
+      final deltaScene = sceneOffset - _dragOffset!;
+      final deltaRelative = Offset(
+        deltaScene.dx / canvasSize.width,
+        deltaScene.dy / canvasSize.height,
+      );
+      setState(() {
+        final angle = _completedAngles[_selectedAngleIndex!];
+        _completedAngles[_selectedAngleIndex!] = AngleMeasurement(
+          vertex: Offset(angle.vertex.dx + deltaRelative.dx, angle.vertex.dy + deltaRelative.dy),
+          point1: Offset(angle.point1.dx + deltaRelative.dx, angle.point1.dy + deltaRelative.dy),
+          point2: Offset(angle.point2.dx + deltaRelative.dx, angle.point2.dy + deltaRelative.dy),
+        );
+        _dragOffset = sceneOffset;
+      });
+      return;
+    }
+    
+    if (_currentTool != ToolMode.annotation) return;
     
     // Оптимизированное обновление без лишних setState
     bool needsUpdate = false;
@@ -1508,6 +1883,16 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _handlePanEnd(DragEndDetails details) {
+    // Сбрасываем флаги перетаскивания линеек и углов
+    if (_isDraggingRuler || _isDraggingAngle) {
+      setState(() {
+        _isDraggingRuler = false;
+        _isDraggingAngle = false;
+        _dragOffset = null;
+      });
+      return;
+    }
+    
     if (_currentTool != ToolMode.annotation || _arrowPoints.isEmpty) return;
     
     // Если у нас есть только одна точка, добавляем вторую в том же месте
@@ -1690,7 +2075,8 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       // Обновляем локальное состояние из контроллеров
       _dicomReport = _reportController.text.trim();
-      _dicomTags = Map.fromEntries(_dicomTags.keys.map((k) => MapEntry(k, _tagControllers[k]?.text ?? '')));
+      // Сохраняем все теги из контроллеров, а не только те, что есть в _dicomTags
+      _dicomTags = Map.fromEntries(_tagControllers.entries.map((e) => MapEntry(e.key, e.value.text.trim())));
 
       final dir = await getApplicationDocumentsDirectory();
       final metaDir = Directory('${dir.path}/dicom_metadata');
@@ -1700,23 +2086,33 @@ class _HomeScreenState extends State<HomeScreen> {
       final baseName = (_currentFileName ?? 'session').replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
       final file = File('${metaDir.path}/$baseName.metadata.json');
       // Подготовка данных аннотаций для сохранения
-      final rulers = _completedRulerLines.map((line) => {
-        'x1': line.start.dx,
-        'y1': line.start.dy,
-        'x2': line.end.dx,
-        'y2': line.end.dy,
-        'distance_mm': line.realDistanceMm,
-        'distance_px': line.distance,
+      final canvasSize = _getCanvasSize();
+      final rulers = _completedRulerLines.map((line) {
+        final absStart = line.getAbsoluteStart(canvasSize);
+        final absEnd = line.getAbsoluteEnd(canvasSize);
+        return {
+          'x1': absStart.dx,
+          'y1': absStart.dy,
+          'x2': absEnd.dx,
+          'y2': absEnd.dy,
+          'distance_mm': line.getRealDistanceMm(canvasSize),
+          'distance_px': line.getDistance(canvasSize),
+        };
       }).toList();
       
-      final angles = _completedAngles.map((angle) => {
-        'vertexX': angle.vertex.dx,
-        'vertexY': angle.vertex.dy,
-        'point1X': angle.point1.dx,
-        'point1Y': angle.point1.dy,
-        'point2X': angle.point2.dx,
-        'point2Y': angle.point2.dy,
-        'angle_degrees': angle.angleDegrees,
+      final angles = _completedAngles.map((angle) {
+        final absVertex = angle.getAbsoluteVertex(canvasSize);
+        final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+        final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+        return {
+          'vertexX': absVertex.dx,
+          'vertexY': absVertex.dy,
+          'point1X': absPoint1.dx,
+          'point1Y': absPoint1.dy,
+          'point2X': absPoint2.dx,
+          'point2Y': absPoint2.dy,
+          'angle_degrees': angle.getAngleDegrees(canvasSize),
+        };
       }).toList();
       
       final texts = _textAnnotations.map((text) => {
@@ -1768,6 +2164,50 @@ class _HomeScreenState extends State<HomeScreen> {
           SnackBar(content: Text('Ошибка сохранения: $e'), backgroundColor: Colors.red),
         );
       }
+    }
+  }
+
+  Future<void> _loadMetadata() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final metaDir = Directory('${dir.path}/dicom_metadata');
+      if (!await metaDir.exists()) {
+        return; // Нет директории с метаданными
+      }
+      
+      final baseName = (_currentFileName ?? 'session').replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+      final file = File('${metaDir.path}/$baseName.metadata.json');
+      
+      if (!await file.exists()) {
+        return; // Нет сохраненных метаданных для этого файла
+      }
+      
+      final jsonString = await file.readAsString();
+      final data = jsonDecode(jsonString) as Map<String, dynamic>;
+      
+      setState(() {
+        // Загружаем сохраненные метаданные
+        if (data.containsKey('patient_name') && data['patient_name'] != null) {
+          _patientName = data['patient_name'].toString();
+        }
+        if (data.containsKey('report') && data['report'] != null) {
+          _dicomReport = data['report'].toString();
+          _reportController.text = _dicomReport ?? '';
+        }
+        if (data.containsKey('tags') && data['tags'] is Map) {
+          final savedTags = (data['tags'] as Map).map((key, value) => MapEntry(key.toString(), value.toString()));
+          // Объединяем сохраненные теги с тегами из DICOM (сохраненные имеют приоритет)
+          savedTags.forEach((key, value) {
+            _dicomTags[key] = value;
+            _tagControllers[key] = TextEditingController(text: value);
+          });
+        }
+      });
+      
+      print("Метаданные загружены из файла: ${file.path}");
+    } catch (e) {
+      print("Ошибка при загрузке метаданных: $e");
+      // Не показываем ошибку пользователю, так как это не критично
     }
   }
 
@@ -1832,7 +2272,9 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       var request = http.MultipartRequest('POST', Uri.parse('${EmbeddedServerService.serverUrl}/export_dicom/'));
       request.files.add(http.MultipartFile.fromBytes('file', _originalDicomBytes!, filename: _currentFileName ?? 'image.dcm'));
-      final meta = jsonEncode({'tags': _dicomTags, 'report': _reportController.text});
+      // Обновляем теги из контроллеров перед экспортом
+      final currentTags = Map.fromEntries(_tagControllers.entries.map((e) => MapEntry(e.key, e.value.text.trim())));
+      final meta = jsonEncode({'tags': currentTags, 'report': _reportController.text.trim()});
       request.fields['metadata'] = meta;
 
       // Подготовка аннотаций для сервера (координаты уже в системе изображения)
@@ -1857,17 +2299,20 @@ class _HomeScreenState extends State<HomeScreen> {
         'strokeWidth': a.strokeWidth,
       }).toList();
 
+      final canvasSize = _getCanvasSize();
       final rulers = <Map<String, dynamic>>[];
       for (int i = 0; i < _completedRulerLines.length; i++) {
         final line = _completedRulerLines[i];
-        final pixelDistance = (line.end - line.start).distance;
-        final realDistanceMm = pixelDistance * (line.pixelSpacing.isFinite && line.pixelSpacing > 0 ? line.pixelSpacing : _pixelSpacingRow);
+        final absStart = line.getAbsoluteStart(canvasSize);
+        final absEnd = line.getAbsoluteEnd(canvasSize);
+        final pixelDistance = line.getDistance(canvasSize);
+        final realDistanceMm = line.getRealDistanceMm(canvasSize);
         final label = 'L${i + 1}: ${realDistanceMm.toStringAsFixed(2)} mm (${pixelDistance.toStringAsFixed(1)} px)';
         rulers.add({
-          'x1': line.start.dx,
-          'y1': line.start.dy,
-          'x2': line.end.dx,
-          'y2': line.end.dy,
+          'x1': absStart.dx,
+          'y1': absStart.dy,
+          'x2': absEnd.dx,
+          'y2': absEnd.dy,
           'label': label,
         });
       }
@@ -1875,15 +2320,19 @@ class _HomeScreenState extends State<HomeScreen> {
       final angles = <Map<String, dynamic>>[];
       for (int i = 0; i < _completedAngles.length; i++) {
         final angle = _completedAngles[i];
-        final label = '∠${i + 1}: ${angle.angleDegrees.toStringAsFixed(1)}°';
+        final absVertex = angle.getAbsoluteVertex(canvasSize);
+        final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+        final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+        final angleDeg = angle.getAngleDegrees(canvasSize);
+        final label = '∠${i + 1}: ${angleDeg.toStringAsFixed(1)}°';
         angles.add({
-          'vertexX': angle.vertex.dx,
-          'vertexY': angle.vertex.dy,
-          'point1X': angle.point1.dx,
-          'point1Y': angle.point1.dy,
-          'point2X': angle.point2.dx,
-          'point2Y': angle.point2.dy,
-          'angle': angle.angleDegrees,
+          'vertexX': absVertex.dx,
+          'vertexY': absVertex.dy,
+          'point1X': absPoint1.dx,
+          'point1Y': absPoint1.dy,
+          'point2X': absPoint2.dx,
+          'point2Y': absPoint2.dy,
+          'angle': angleDeg,
           'label': label,
         });
       }
@@ -1901,9 +2350,45 @@ class _HomeScreenState extends State<HomeScreen> {
       request.fields['annotations'] = annotations;
 
       // Добавляем готовый PNG-рендер из области RepaintBoundary, чтобы DICOM совпадал 1:1
+      // Используем исходный размер изображения из DICOM для масштабирования
       final boundary = _captureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
       if (boundary != null) {
-        final image = await boundary.toImage(pixelRatio: ui.window.devicePixelRatio);
+        // Получаем исходный размер изображения из DICOM тегов или из декодированного изображения
+        double targetWidth = 0;
+        double targetHeight = 0;
+        
+        // Пытаемся получить размер из DICOM тегов
+        if (_dicomTags.containsKey('Columns') && _dicomTags.containsKey('Rows')) {
+          try {
+            targetWidth = double.parse(_dicomTags['Columns']!);
+            targetHeight = double.parse(_dicomTags['Rows']!);
+          } catch (e) {
+            print("Ошибка парсинга размеров из DICOM тегов: $e");
+          }
+        }
+        
+        // Если не удалось получить из тегов, используем размер декодированного изображения
+        if (targetWidth == 0 || targetHeight == 0) {
+          if (_decodedImage != null) {
+            targetWidth = _decodedImage!.width.toDouble();
+            targetHeight = _decodedImage!.height.toDouble();
+          }
+        }
+        
+        // Получаем размер canvas
+        // boundary уже является RenderRepaintBoundary, который наследуется от RenderBox
+        final canvasSize = boundary.size;
+        
+        // Вычисляем pixelRatio для масштабирования до исходного размера
+        double pixelRatio = 1.0;
+        if (targetWidth > 0 && targetHeight > 0 && canvasSize.width > 0 && canvasSize.height > 0) {
+          // Используем максимальное соотношение, чтобы изображение было не меньше исходного размера
+          final ratioX = targetWidth / canvasSize.width;
+          final ratioY = targetHeight / canvasSize.height;
+          pixelRatio = ratioX > ratioY ? ratioX : ratioY;
+        }
+        
+        final image = await boundary.toImage(pixelRatio: pixelRatio);
         final pngData = await image.toByteData(format: ui.ImageByteFormat.png);
         if (pngData != null) {
           final pngBytes = pngData.buffer.asUint8List();
@@ -1941,6 +2426,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
     _transformationController.dispose();
     EmbeddedServerService.stopServer();
@@ -2364,19 +2850,23 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 }
                                               },
                                               child: GestureDetector(
+                                              behavior: HitTestBehavior.opaque,
                                               onTapDown: _handleTap,
                                               onTapUp: _handleTapUp,
                                               onPanStart: _handlePanStart,
                                               onPanUpdate: _handlePanUpdate,
                                               onPanEnd: _handlePanEnd,
-                                              child: InteractiveViewer(
-                                                transformationController: _transformationController,
-                                                panEnabled: _currentTool == ToolMode.pan,
-                                                scaleEnabled: _currentTool == ToolMode.pan,
+                                              child: IgnorePointer(
+                                                ignoring: _isDraggingRuler || _isDraggingAngle,
+                                                child: InteractiveViewer(
+                                                  transformationController: _transformationController,
+                                                  panEnabled: _currentTool == ToolMode.pan && !_isDraggingRuler && !_isDraggingAngle,
+                                                  scaleEnabled: _currentTool == ToolMode.pan && !_isDraggingRuler && !_isDraggingAngle,
                                                 minScale: 0.1, maxScale: 8.0,
                                                 child: RepaintBoundary(
                                                   key: _captureKey,
                                                   child: Stack(
+                                                  key: _canvasSizeKey,
                                                   fit: StackFit.expand,
                                                   children: [
                                                     // Базовый чёрный слой, чтобы фон всегда оставался чёрным
@@ -2434,7 +2924,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                                     painter: RulerPainter(
                                                       currentPoints: List.of(_rulerPoints), 
                                                       completedLines: List.of(_completedRulerLines),
-                                                      pixelSpacing: _pixelSpacingRow
+                                                      pixelSpacing: _pixelSpacingRow,
+                                                      selectedIndex: _selectedRulerIndex,
+                                                      imageSize: _decodedImage != null 
+                                                        ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
+                                                        : null,
                                                     ),
                                                     child: Container(), // Пустой контейнер для предотвращения ошибок
                                                   ),
@@ -2442,6 +2936,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                                     painter: AnglePainter(
                                                       currentPoints: List.of(_anglePoints),
                                                       completedAngles: List.of(_completedAngles),
+                                                      selectedIndex: _selectedAngleIndex,
+                                                      imageSize: _decodedImage != null 
+                                                        ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
+                                                        : null,
                                                     ),
                                                     child: Container(), // Пустой контейнер для предотвращения ошибок
                                                   ),
@@ -2472,6 +2970,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ),
                                     ),
                                   ),
+                                ),
                               ],
                             ),
                           ),
