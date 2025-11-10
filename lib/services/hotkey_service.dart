@@ -47,6 +47,9 @@ class HotkeyService {
       case 'angle':
         expectedCombination = _hotkeySettings.angleKey;
         break;
+      case 'magnifier':
+        expectedCombination = _hotkeySettings.magnifierKey;
+        break;
       case 'brightness':
         expectedCombination = _hotkeySettings.brightnessKey;
         break;
@@ -96,6 +99,7 @@ class HotkeyService {
     if (_hotkeySettings.panKey == keyString) return 'Панорамирование';
     if (_hotkeySettings.rulerKey == keyString) return 'Линейка';
     if (_hotkeySettings.angleKey == keyString) return 'Угол';
+    if (_hotkeySettings.magnifierKey == keyString) return 'Лупа';
     if (_hotkeySettings.brightnessKey == keyString) return 'Яркость';
     if (_hotkeySettings.invertKey == keyString) return 'Инверсия';
     if (_hotkeySettings.rotateKey == keyString) return 'Поворот';

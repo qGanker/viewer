@@ -19,7 +19,7 @@ import '../utils/keyboard_utils.dart';
 import '../widgets/windows_menu_bar.dart';
 
 // Перечисление для инструментов
-enum ToolMode { pan, ruler, angle, rotate, brightness, invert, annotation }
+enum ToolMode { pan, ruler, angle, magnifier, rotate, brightness, invert, annotation }
 
 // Перечисление для типов действий
 enum ActionType { rulerAdded, angleAdded, textAdded, arrowAdded, brightnessChanged, inverted, rotated }
@@ -491,6 +491,316 @@ class AnglePainter extends CustomPainter {
   }
 }
 
+// Класс для рисования лупы
+class MagnifierPainter extends CustomPainter {
+  final Offset? position;
+  final double size;
+  final double zoom;
+  final Matrix4? transformMatrix;
+  final ui.Image? decodedImage;
+  final double pixelSpacing; // Пиксельный размер для масштабной линейки
+  final double brightness; // Яркость
+  final bool isInverted; // Инверсия
+  final double rotationAngle; // Угол поворота в градусах
+  
+  MagnifierPainter({
+    required this.position,
+    required this.size,
+    required this.zoom,
+    this.transformMatrix,
+    this.decodedImage,
+    this.pixelSpacing = 1.0,
+    this.brightness = 1.0,
+    this.isInverted = false,
+    this.rotationAngle = 0.0,
+  });
+  
+  @override
+  void paint(Canvas canvas, Size canvasSize) {
+    if (position == null || decodedImage == null) return;
+    
+    try {
+      final imageWidth = decodedImage!.width.toDouble();
+      final imageHeight = decodedImage!.height.toDouble();
+      
+      // Вычисляем реальный размер изображения на экране с учетом BoxFit.contain
+      final imageAspect = imageWidth / imageHeight;
+      final canvasAspect = canvasSize.width / canvasSize.height;
+      
+      double displayedImageWidth;
+      double displayedImageHeight;
+      double imageOffsetX = 0;
+      double imageOffsetY = 0;
+      
+      if (imageAspect > canvasAspect) {
+        // Изображение шире - ограничено по ширине
+        displayedImageWidth = canvasSize.width;
+        displayedImageHeight = canvasSize.width / imageAspect;
+        imageOffsetY = (canvasSize.height - displayedImageHeight) / 2;
+      } else {
+        // Изображение выше - ограничено по высоте
+        displayedImageHeight = canvasSize.height;
+        displayedImageWidth = canvasSize.height * imageAspect;
+        imageOffsetX = (canvasSize.width - displayedImageWidth) / 2;
+      }
+      
+      // Преобразуем позицию курсора в координаты изображения с учетом трансформации
+      Offset? imagePosition;
+      if (transformMatrix != null) {
+        final invertedMatrix = Matrix4.inverted(transformMatrix!);
+        final transformedPosition = MatrixUtils.transformPoint(invertedMatrix, position!);
+        // Преобразуем из координат canvas в координаты исходного изображения
+        // Учитываем поворот изображения
+        double relativeX = (transformedPosition.dx - imageOffsetX) / displayedImageWidth;
+        double relativeY = (transformedPosition.dy - imageOffsetY) / displayedImageHeight;
+        
+        // Применяем обратный поворот к координатам
+        if (rotationAngle != 0.0) {
+          final rotationRad = -rotationAngle * 3.14159 / 180; // Обратный поворот
+          final centerX = 0.5;
+          final centerY = 0.5;
+          final dx = relativeX - centerX;
+          final dy = relativeY - centerY;
+          final cosR = cos(rotationRad);
+          final sinR = sin(rotationRad);
+          relativeX = centerX + dx * cosR - dy * sinR;
+          relativeY = centerY + dx * sinR + dy * cosR;
+        }
+        
+        imagePosition = Offset(
+          relativeX * imageWidth,
+          relativeY * imageHeight,
+        );
+      } else {
+        // Без трансформации
+        double relativeX = (position!.dx - imageOffsetX) / displayedImageWidth;
+        double relativeY = (position!.dy - imageOffsetY) / displayedImageHeight;
+        
+        // Применяем обратный поворот к координатам
+        if (rotationAngle != 0.0) {
+          final rotationRad = -rotationAngle * 3.14159 / 180; // Обратный поворот
+          final centerX = 0.5;
+          final centerY = 0.5;
+          final dx = relativeX - centerX;
+          final dy = relativeY - centerY;
+          final cosR = cos(rotationRad);
+          final sinR = sin(rotationRad);
+          relativeX = centerX + dx * cosR - dy * sinR;
+          relativeY = centerY + dx * sinR + dy * cosR;
+        }
+        
+        imagePosition = Offset(
+          relativeX * imageWidth,
+          relativeY * imageHeight,
+        );
+      }
+      
+      // Проверяем, что imagePosition находится в пределах изображения
+      if (imagePosition.dx < 0 || imagePosition.dx > imageWidth ||
+          imagePosition.dy < 0 || imagePosition.dy > imageHeight) {
+        return; // Курсор вне изображения
+      }
+      
+      // Размер области для захвата (в координатах исходного изображения)
+      // size - размер лупы на экране в пикселях экрана (например, 200px)
+      // zoom - коэффициент увеличения (например, 2.0 означает 2x увеличение)
+      // Размер области на экране без увеличения = size / zoom
+      // Но нужно пересчитать в пиксели исходного изображения с учетом масштаба
+      // Масштаб = imageWidth / displayedImageWidth
+      final scaleFactor = imageWidth / displayedImageWidth;
+      final captureSizeOnScreen = size / zoom; // Размер области на экране без увеличения
+      final captureSizeInImagePixels = captureSizeOnScreen * scaleFactor;
+      final halfCapture = captureSizeInImagePixels / 2;
+      
+      // Вычисляем область для увеличения в координатах исходного изображения
+      final sourceRect = Rect.fromLTWH(
+        (imagePosition.dx - halfCapture).clamp(0.0, imageWidth),
+        (imagePosition.dy - halfCapture).clamp(0.0, imageHeight),
+        captureSizeInImagePixels.clamp(0.0, imageWidth - (imagePosition.dx - halfCapture).clamp(0.0, imageWidth)),
+        captureSizeInImagePixels.clamp(0.0, imageHeight - (imagePosition.dy - halfCapture).clamp(0.0, imageHeight)),
+      );
+      
+      // Реальный размер захваченной области в пикселях исходного изображения
+      final actualCaptureSize = sourceRect.width;
+      
+      // Позиция лупы на экране (смещена от курсора вверх и влево)
+      final magnifierOffset = Offset(
+        (position!.dx - size / 2).clamp(0.0, canvasSize.width - size),
+        (position!.dy - size / 2 - 30).clamp(0.0, canvasSize.height - size),
+      );
+      
+      // Область для отрисовки увеличенного изображения
+      final destRect = Rect.fromLTWH(
+        magnifierOffset.dx,
+        magnifierOffset.dy,
+        size,
+        size,
+      );
+      
+      // Сохраняем состояние canvas
+      canvas.save();
+      
+      // Обрезаем canvas до области лупы
+      canvas.clipRect(destRect);
+      
+      // Применяем фильтры для яркости и инверсии
+      final colorFilter = _createColorFilter();
+      
+      // Рисуем увеличенное изображение с фильтрами
+      final paint = Paint()
+        ..filterQuality = FilterQuality.high
+        ..colorFilter = colorFilter;
+      
+      canvas.drawImageRect(
+        decodedImage!,
+        sourceRect,
+        destRect,
+        paint,
+      );
+      
+      // Восстанавливаем состояние canvas
+      canvas.restore();
+      
+      // Рисуем рамку
+      final borderPaint = Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0;
+      canvas.drawRect(destRect, borderPaint);
+      
+      // Рисуем сетку поверх изображения
+      final gridPaint = Paint()
+        ..color = Colors.white.withOpacity(0.5)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0;
+      
+      final gridStep = size / 4; // 4x4 сетка
+      for (int i = 1; i < 4; i++) {
+        // Вертикальные линии
+        canvas.drawLine(
+          Offset(magnifierOffset.dx + i * gridStep, magnifierOffset.dy),
+          Offset(magnifierOffset.dx + i * gridStep, magnifierOffset.dy + size),
+          gridPaint,
+        );
+        // Горизонтальные линии
+        canvas.drawLine(
+          Offset(magnifierOffset.dx, magnifierOffset.dy + i * gridStep),
+          Offset(magnifierOffset.dx + size, magnifierOffset.dy + i * gridStep),
+          gridPaint,
+        );
+      }
+      
+      // Рисуем подписи на осях
+      final textStyle = TextStyle(
+        color: Colors.white,
+        fontSize: 10,
+        fontWeight: FontWeight.bold,
+        shadows: [
+          Shadow(
+            offset: Offset(1, 1),
+            blurRadius: 2,
+            color: Colors.black,
+          ),
+        ],
+      );
+      final textPainter = TextPainter(
+        textDirection: TextDirection.ltr,
+      );
+      
+      // Вычисляем размер в см для масштабной линейки
+      // actualCaptureSize - это реальный размер области в пикселях исходного изображения
+      // pixelSpacing - это размер пикселя в мм
+      final sizeInMm = actualCaptureSize * pixelSpacing;
+      final sizeInCm = sizeInMm / 10.0;
+      
+      // Подписи по горизонтали (0, 1, 2, 3, 4 см)
+      for (int i = 0; i <= 4; i++) {
+        final x = magnifierOffset.dx + i * gridStep;
+        final cmValue = (i * sizeInCm / 4).toStringAsFixed(1);
+        textPainter.text = TextSpan(
+          text: i == 0 ? '0см' : '$cmValue',
+          style: textStyle,
+        );
+        textPainter.layout();
+        textPainter.paint(
+          canvas,
+          Offset(x - textPainter.width / 2, magnifierOffset.dy + size + 2),
+        );
+      }
+      
+      // Подписи по вертикали (0, 1, 2, 3, 4 см)
+      for (int i = 0; i <= 4; i++) {
+        final y = magnifierOffset.dy + i * gridStep;
+        final cmValue = (i * sizeInCm / 4).toStringAsFixed(1);
+        textPainter.text = TextSpan(
+          text: i == 0 ? '0см' : '$cmValue',
+          style: textStyle,
+        );
+        textPainter.layout();
+        textPainter.paint(
+          canvas,
+          Offset(magnifierOffset.dx - textPainter.width - 2, y - textPainter.height / 2),
+        );
+      }
+      
+    } catch (e) {
+      print("Ошибка в MagnifierPainter: $e");
+    }
+  }
+  
+  // Создает ColorFilter для яркости и инверсии
+  ColorFilter? _createColorFilter() {
+    if (brightness == 1.0 && !isInverted) {
+      return null; // Нет необходимости в фильтре
+    }
+    
+    // Матрица для яркости
+    final brightnessMatrix = <double>[
+      brightness, 0.0, 0.0, 0.0, 0.0,  // Red
+      0.0, brightness, 0.0, 0.0, 0.0,  // Green  
+      0.0, 0.0, brightness, 0.0, 0.0,  // Blue
+      0.0, 0.0, 0.0, 1.0, 0.0,            // Alpha
+    ];
+    
+    if (isInverted) {
+      // Матрица для инверсии
+      final invertMatrix = <double>[
+        -1.0, 0.0, 0.0, 0.0, 255.0,  // Инверсия красного
+        0.0, -1.0, 0.0, 0.0, 255.0,  // Инверсия зеленого
+        0.0, 0.0, -1.0, 0.0, 255.0,  // Инверсия синего
+        0.0, 0.0, 0.0, 1.0, 0.0,     // Альфа без изменений
+      ];
+      
+      // Комбинируем матрицы: сначала применяем яркость, потом инверсию
+      // Для цветовых фильтров: результат = invert(brightness(input))
+      // Это означает: invertMatrix * brightnessMatrix
+      final combinedMatrix = List<double>.filled(20, 0.0);
+      for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+          combinedMatrix[i * 5 + j] = invertMatrix[i * 5 + j] * brightnessMatrix[j * 5 + j];
+        }
+        // Последний столбец (смещение)
+        combinedMatrix[i * 5 + 4] = invertMatrix[i * 5 + 4];
+      }
+      return ColorFilter.matrix(combinedMatrix);
+    } else {
+      return ColorFilter.matrix(brightnessMatrix);
+    }
+  }
+  
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) {
+    if (oldDelegate is! MagnifierPainter) return true;
+    return oldDelegate.position != position ||
+           oldDelegate.size != size ||
+           oldDelegate.zoom != zoom ||
+           oldDelegate.decodedImage != decodedImage ||
+           oldDelegate.brightness != brightness ||
+           oldDelegate.isInverted != isInverted ||
+           oldDelegate.rotationAngle != rotationAngle;
+  }
+}
+
 // Новая функция для декодирования в фоне
 Uint8List _decodeResponseInIsolate(String responseBody) {
   final Map<String, dynamic> data = jsonDecode(responseBody);
@@ -536,6 +846,14 @@ class _HomeScreenState extends State<HomeScreen> {
   
   // Угол: все завершенные измерения (∠1, ∠2, ∠3...)
   List<AngleMeasurement> _completedAngles = [];
+  
+  // Лупа: позиция курсора для отображения увеличенной области
+  Offset? _magnifierPosition;
+  bool _isMagnifierPressed = false; // Флаг зажатой ЛКМ для лупы
+  double _magnifierSize = 200.0; // Размер лупы в пикселях
+  double _magnifierZoom = 2.0; // Увеличение
+  ui.Image? _decodedImage; // Кэшированное декодированное изображение для лупы
+  
   double _pixelSpacingRow = 1.0;
   final TransformationController _transformationController = TransformationController();
 
@@ -685,12 +1003,53 @@ class _HomeScreenState extends State<HomeScreen> {
       _arrowPoints.clear();
       _isDragging = false;
       _lastTapPosition = null;
+      _magnifierPosition = null; // Очищаем позицию лупы
+      _isMagnifierPressed = false; // Сбрасываем флаг зажатой ЛКМ
       
       // Переключаем инструмент
       _currentTool = newTool;
       
       print('Инструмент переключен на: $newTool');
     });
+  }
+  
+  // Обработка движения мыши для лупы
+  void _handlePointerMove(PointerEvent event) {
+    if (_currentTool == ToolMode.magnifier && _imageBytes != null && _isMagnifierPressed) {
+      setState(() {
+        _magnifierPosition = event.localPosition;
+      });
+    }
+  }
+  
+  // Обработка нажатия ЛКМ для лупы
+  void _handlePointerDown(PointerDownEvent event) {
+    if (_currentTool == ToolMode.magnifier && _imageBytes != null && event.buttons == 1) {
+      setState(() {
+        _isMagnifierPressed = true;
+        _magnifierPosition = event.localPosition;
+      });
+    }
+  }
+  
+  // Обработка отпускания ЛКМ для лупы
+  void _handlePointerUp(PointerUpEvent event) {
+    if (_currentTool == ToolMode.magnifier) {
+      setState(() {
+        _isMagnifierPressed = false;
+        _magnifierPosition = null;
+      });
+    }
+  }
+  
+  // Обработка выхода мыши из области для лупы
+  void _handlePointerExit(PointerEvent event) {
+    if (_currentTool == ToolMode.magnifier) {
+      setState(() {
+        _isMagnifierPressed = false;
+        _magnifierPosition = null;
+      });
+    }
   }
 
   @override
@@ -770,12 +1129,16 @@ class _HomeScreenState extends State<HomeScreen> {
       _errorMessage = ''; 
       
       _imageBytes = null; 
+      _decodedImage?.dispose();
+      _decodedImage = null; 
       _originalImageBytes = null; // Сбрасываем исходное изображение
       _patientName = null; 
       _dicomTags = {};
       _dicomReport = null;
       _rulerPoints = []; 
       _completedRulerLines = []; // Сбрасываем завершенные линии
+      _anglePoints = []; // Сбрасываем текущие точки углов
+      _completedAngles = []; // Сбрасываем завершенные углы
       _textAnnotations = []; // Сбрасываем текстовые аннотации
       _arrowAnnotations = []; // Сбрасываем стрелки
       _arrowPoints = []; // Сбрасываем точки для стрелок
@@ -860,8 +1223,19 @@ class _HomeScreenState extends State<HomeScreen> {
             try {
               final imageBytes = await compute(_decodeImageInIsolate, data['image_base64']);
               
+              // Декодируем изображение для лупы
+              ui.Image? decodedImage;
+              try {
+                final codec = await ui.instantiateImageCodec(imageBytes);
+                final frame = await codec.getNextFrame();
+                decodedImage = frame.image;
+              } catch (e) {
+                print("Ошибка при декодировании изображения для лупы: $e");
+              }
+              
               setState(() {
                 _imageBytes = imageBytes;
+                _decodedImage = decodedImage; // Сохраняем декодированное изображение
                 _isLoading = false;
                 _errorMessage = '';
                 print("Изображение декодировано, размер: ${_imageBytes?.length ?? 0} байт");
@@ -933,20 +1307,21 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_currentTool == ToolMode.angle) {
       setState(() {
         if (_anglePoints.length == 0) {
-          // Первый клик - устанавливаем вершину угла
+          // Первый клик - устанавливаем первую точку на первом луче
           _anglePoints.add(sceneOffset);
-          print("Угол: установлена вершина");
+          print("Угол: установлена первая точка на первом луче");
         } else if (_anglePoints.length == 1) {
-          // Второй клик - устанавливаем первую точку на луче
+          // Второй клик - устанавливаем вершину угла
           _anglePoints.add(sceneOffset);
-          print("Угол: установлена первая точка на луче");
+          print("Угол: установлена вершина угла");
         } else if (_anglePoints.length == 2) {
-          // Третий клик - устанавливаем вторую точку на луче и завершаем измерение
+          // Третий клик - устанавливаем третью точку на втором луче и завершаем измерение
+          // Угол измеряется между точками 1 и 3, с вершиной в точке 2
           _anglePoints.add(sceneOffset);
           final completedAngle = AngleMeasurement(
-            vertex: _anglePoints[0],
-            point1: _anglePoints[1],
-            point2: _anglePoints[2],
+            vertex: _anglePoints[1],  // Вершина угла - вторая точка
+            point1: _anglePoints[0],   // Первая точка на первом луче
+            point2: _anglePoints[2],  // Третья точка на втором луче
           );
           _completedAngles = List.of(_completedAngles)..add(completedAngle);
           _addToHistory(ActionType.angleAdded, null);
@@ -1287,7 +1662,22 @@ class _HomeScreenState extends State<HomeScreen> {
       final response = await http.post(url, headers: headers, body: body);
       if (response.statusCode == 200 && mounted) {
         final newImageBytes = await compute(_decodeResponseInIsolate, response.body);
-        setState(() => _imageBytes = newImageBytes);
+        
+        // Декодируем изображение для лупы
+        ui.Image? decodedImage;
+        try {
+          final codec = await ui.instantiateImageCodec(newImageBytes);
+          final frame = await codec.getNextFrame();
+          decodedImage = frame.image;
+        } catch (e) {
+          print("Ошибка при декодировании изображения для лупы при обновлении W/L: $e");
+        }
+        
+        setState(() {
+          _imageBytes = newImageBytes;
+          _decodedImage?.dispose(); // Освобождаем старое изображение
+          _decodedImage = decodedImage; // Сохраняем новое декодированное изображение
+        });
       }
     } catch (e) {
       print("Failed to update W/L: $e");
@@ -1556,6 +1946,7 @@ class _HomeScreenState extends State<HomeScreen> {
     EmbeddedServerService.stopServer();
     _reportController.dispose();
     for (final c in _tagControllers.values) { c.dispose(); }
+    _decodedImage?.dispose(); // Освобождаем декодированное изображение
     super.dispose();
   }
 
@@ -1668,6 +2059,11 @@ class _HomeScreenState extends State<HomeScreen> {
             toolChanged = true;
             toolName = 'Угол';
             _switchTool(ToolMode.angle);
+          } else if (HotkeyService.isKeyForTool(keyString, 'magnifier', ctrl: ctrlPressed, alt: altPressed, shift: shiftPressed)) {
+            print('✓ MAGNIFIER hotkey matched');
+            toolChanged = true;
+            toolName = 'Лупа';
+            _switchTool(ToolMode.magnifier);
           } else if (HotkeyService.isKeyForTool(keyString, 'brightness', ctrl: ctrlPressed, alt: altPressed, shift: shiftPressed)) {
             print('✓ BRIGHTNESS hotkey matched');
             toolChanged = true;
@@ -1748,7 +2144,7 @@ class _HomeScreenState extends State<HomeScreen> {
           // Основное содержимое
           Expanded(
             child: Center(
-        child: _isLoading
+              child: _isLoading
             ? Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -1815,6 +2211,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                   color: _currentTool == ToolMode.angle ? Colors.lightBlueAccent : Colors.white, 
                                   onPressed: () => _switchTool(ToolMode.angle),
                                   tooltip: 'Измерение угла (3 клика)',
+                                ),
+                                const SizedBox(height: 15),
+                                IconButton(
+                                  icon: const Icon(Icons.zoom_in), 
+                                  color: _currentTool == ToolMode.magnifier ? Colors.lightBlueAccent : Colors.white, 
+                                  onPressed: () => _switchTool(ToolMode.magnifier),
+                                  tooltip: 'Лупа',
                                 ),
                                 const SizedBox(height: 15),
                                 IconButton(
@@ -1889,8 +2292,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               ],
                             ),
                           ),
-                      // Область просмотра
-                      Expanded(
+                          // Область просмотра
+                          Expanded(
                             child: Column(
                               children: [
                                 Padding(
@@ -1935,25 +2338,32 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 ),
                                         Expanded(
-                                          child: Listener(
-                                            onPointerSignal: (PointerSignalEvent event) {
-                                              // Обрабатываем колёсико мыши только когда активен инструмент яркости
-                                              if (event is PointerScrollEvent && _currentTool == ToolMode.brightness) {
-                                                // Изменяем яркость в зависимости от направления прокрутки
-                                                double delta = event.scrollDelta.dy > 0 ? -0.1 : 0.1;
-                                                double newBrightness = (_brightness + delta).clamp(0.1, 3.0);
-                                                
-                                                // Проверяем, изменилось ли значение
-                                                if (newBrightness != _brightness) {
-                                                  // Сохраняем предыдущее значение в историю
-                                                  _addToHistory(ActionType.brightnessChanged, _brightness);
-                                                  setState(() {
-                                                    _brightness = newBrightness;
-                                                  });
+                                          child: MouseRegion(
+                                            onExit: _currentTool == ToolMode.magnifier ? (PointerEvent event) {
+                                              _handlePointerExit(event);
+                                            } : null,
+                                            child: Listener(
+                                              onPointerDown: _currentTool == ToolMode.magnifier ? _handlePointerDown : null,
+                                              onPointerUp: _currentTool == ToolMode.magnifier ? _handlePointerUp : null,
+                                              onPointerMove: _currentTool == ToolMode.magnifier ? _handlePointerMove : null,
+                                              onPointerSignal: (PointerSignalEvent event) {
+                                                // Обрабатываем колёсико мыши только когда активен инструмент яркости
+                                                if (event is PointerScrollEvent && _currentTool == ToolMode.brightness) {
+                                                  // Изменяем яркость в зависимости от направления прокрутки
+                                                  double delta = event.scrollDelta.dy > 0 ? -0.1 : 0.1;
+                                                  double newBrightness = (_brightness + delta).clamp(0.1, 3.0);
+                                                  
+                                                  // Проверяем, изменилось ли значение
+                                                  if (newBrightness != _brightness) {
+                                                    // Сохраняем предыдущее значение в историю
+                                                    _addToHistory(ActionType.brightnessChanged, _brightness);
+                                                    setState(() {
+                                                      _brightness = newBrightness;
+                                                    });
+                                                  }
                                                 }
-                                              }
-                                            },
-                                            child: GestureDetector(
+                                              },
+                                              child: GestureDetector(
                                               onTapDown: _handleTap,
                                               onTapUp: _handleTapUp,
                                               onPanStart: _handlePanStart,
@@ -2039,14 +2449,29 @@ class _HomeScreenState extends State<HomeScreen> {
                                                     painter: AnnotationPainter(textAnnotations: _textAnnotations, arrowAnnotations: _arrowAnnotations, arrowPoints: _arrowPoints),
                                                     child: Container(), // Пустой контейнер для предотвращения ошибок
                                                   ),
+                                                  CustomPaint(
+                                                    painter: MagnifierPainter(
+                                                      position: _magnifierPosition,
+                                                      size: _magnifierSize,
+                                                      zoom: _magnifierZoom,
+                                                      transformMatrix: _transformationController.value,
+                                                      decodedImage: _decodedImage,
+                                                      pixelSpacing: _pixelSpacingRow,
+                                                      brightness: _brightness,
+                                                      isInverted: _isInverted,
+                                                      rotationAngle: _rotationAngle,
+                                                    ),
+                                                    child: Container(), // Пустой контейнер для предотвращения ошибок
+                                                  ),
                                                   if (_isUpdatingWL) const Center(child: CircularProgressIndicator()),
                                                 ],
-                                                ),
-                                              ),
                                               ),
                                             ),
                                           ),
                                         ),
+                                      ),
+                                    ),
+                                  ),
                               ],
                             ),
                           ),
