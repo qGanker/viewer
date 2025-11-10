@@ -1557,7 +1557,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               });
               
               // Загружаем сохраненные метаданные, если они есть
+              // Загружаем метаданные и аннотации после установки изображения
+              // Используем addPostFrameCallback, чтобы canvas успел отрендериться
+              WidgetsBinding.instance.addPostFrameCallback((_) async {
               await _loadMetadata();
+              });
             } catch (decodeError) {
               print("Ошибка при декодировании изображения: $decodeError");
               setState(() { 
@@ -2590,48 +2594,49 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final baseName = (_currentFileName ?? 'session').replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
       final file = File('${metaDir.path}/$baseName.metadata.json');
       // Подготовка данных аннотаций для сохранения
+      // Сохраняем в относительных координатах для линеек и углов (независимость от размера экрана)
+      // Для текстовых аннотаций и стрелок сохраняем абсолютные координаты (scene coordinates)
       final canvasSize = _getCanvasSize();
       final rulers = _completedRulerLines.map((line) {
-        final absStart = line.getAbsoluteStart(canvasSize);
-        final absEnd = line.getAbsoluteEnd(canvasSize);
+        // Сохраняем относительные координаты (0.0-1.0)
         return {
-          'x1': absStart.dx,
-          'y1': absStart.dy,
-          'x2': absEnd.dx,
-          'y2': absEnd.dy,
-          'distance_mm': line.getRealDistanceMm(canvasSize),
-          'distance_px': line.getDistance(canvasSize),
+          'startX': line.start.dx,
+          'startY': line.start.dy,
+          'endX': line.end.dx,
+          'endY': line.end.dy,
+          'pixelSpacing': line.pixelSpacing,
         };
       }).toList();
       
       final angles = _completedAngles.map((angle) {
-        final absVertex = angle.getAbsoluteVertex(canvasSize);
-        final absPoint1 = angle.getAbsolutePoint1(canvasSize);
-        final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+        // Сохраняем относительные координаты (0.0-1.0)
         return {
-          'vertexX': absVertex.dx,
-          'vertexY': absVertex.dy,
-          'point1X': absPoint1.dx,
-          'point1Y': absPoint1.dy,
-          'point2X': absPoint2.dx,
-          'point2Y': absPoint2.dy,
-          'angle_degrees': angle.getAngleDegrees(canvasSize),
+          'vertexX': angle.vertex.dx,
+          'vertexY': angle.vertex.dy,
+          'point1X': angle.point1.dx,
+          'point1Y': angle.point1.dy,
+          'point2X': angle.point2.dx,
+          'point2Y': angle.point2.dy,
         };
       }).toList();
       
-      final texts = _textAnnotations.map((text) => {
-        'x': text.position.dx,
-        'y': text.position.dy,
+      // Преобразуем текстовые аннотации в относительные координаты
+      final texts = _textAnnotations.map((text) => <String, dynamic>{
+        // Преобразуем абсолютные координаты (scene coordinates) в относительные (0.0-1.0)
+        'x': canvasSize.width > 0 ? text.position.dx / canvasSize.width : 0.0,
+        'y': canvasSize.height > 0 ? text.position.dy / canvasSize.height : 0.0,
         'text': text.text,
         'color': text.color.value,
         'fontSize': text.fontSize,
       }).toList();
       
-      final arrows = _arrowAnnotations.map((arrow) => {
-        'x1': arrow.start.dx,
-        'y1': arrow.start.dy,
-        'x2': arrow.end.dx,
-        'y2': arrow.end.dy,
+      // Преобразуем стрелки в относительные координаты
+      final arrows = _arrowAnnotations.map((arrow) => <String, dynamic>{
+        // Преобразуем абсолютные координаты (scene coordinates) в относительные (0.0-1.0)
+        'x1': canvasSize.width > 0 ? arrow.start.dx / canvasSize.width : 0.0,
+        'y1': canvasSize.height > 0 ? arrow.start.dy / canvasSize.height : 0.0,
+        'x2': canvasSize.width > 0 ? arrow.end.dx / canvasSize.width : 0.0,
+        'y2': canvasSize.height > 0 ? arrow.end.dy / canvasSize.height : 0.0,
         'color': arrow.color.value,
         'strokeWidth': arrow.strokeWidth,
       }).toList();
@@ -2656,7 +2661,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         },
         'updated_at': DateTime.now().toIso8601String(),
       };
+      print("Сохраняем аннотации: rulers=${rulers.length}, angles=${angles.length}, texts=${texts.length}, arrows=${arrows.length}");
       await file.writeAsString(const JsonEncoder.withIndent('  ').convert(data));
+      print("Метаданные сохранены в файл: ${file.path}");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Метаданные сохранены'), duration: Duration(milliseconds: 1200)),
@@ -2679,10 +2686,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return; // Нет директории с метаданными
       }
       
-      final baseName = (_currentFileName ?? 'session').replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+      // Убираем суффикс _edited.dcm если есть, чтобы найти оригинальные метаданные
+      String baseName = (_currentFileName ?? 'session').replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+      // Если файл заканчивается на _edited.dcm, убираем _edited
+      if (baseName.endsWith('_edited.dcm')) {
+        baseName = baseName.replaceAll('_edited.dcm', '.dcm');
+      }
+      // Убираем расширение .dcm если есть
+      baseName = baseName.replaceAll('.dcm', '');
       final file = File('${metaDir.path}/$baseName.metadata.json');
+      print("Ищем метаданные для файла: $baseName (исходное имя: ${_currentFileName})");
       
       if (!await file.exists()) {
+        print("Файл метаданных не найден: ${file.path}");
         return; // Нет сохраненных метаданных для этого файла
       }
       
@@ -2706,9 +2722,140 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _tagControllers[key] = TextEditingController(text: value);
           });
         }
+        
+        // Загружаем аннотации
+        if (data.containsKey('annotations') && data['annotations'] is Map) {
+          final annotations = data['annotations'] as Map<String, dynamic>;
+          print("Загружаем аннотации: ${annotations.keys.toList()}");
+          print("Содержимое аннотаций: rulers=${annotations['rulers']?.length ?? 0}, angles=${annotations['angles']?.length ?? 0}, texts=${annotations['texts']?.length ?? 0}, arrows=${annotations['arrows']?.length ?? 0}");
+          
+          // Загружаем линейки (относительные координаты)
+          if (annotations.containsKey('rulers') && annotations['rulers'] is List) {
+            print("Загружаем ${(annotations['rulers'] as List).length} линеек");
+            _completedRulerLines = (annotations['rulers'] as List).map((ruler) {
+              return RulerLine(
+                start: Offset(
+                  (ruler['startX'] ?? ruler['x1'] ?? 0.0).toDouble(),
+                  (ruler['startY'] ?? ruler['y1'] ?? 0.0).toDouble(),
+                ),
+                end: Offset(
+                  (ruler['endX'] ?? ruler['x2'] ?? 0.0).toDouble(),
+                  (ruler['endY'] ?? ruler['y2'] ?? 0.0).toDouble(),
+                ),
+                pixelSpacing: (ruler['pixelSpacing'] ?? _pixelSpacingRow).toDouble(),
+              );
+            }).toList();
+          }
+          
+          // Загружаем углы (относительные координаты)
+          if (annotations.containsKey('angles') && annotations['angles'] is List) {
+            final anglesList = annotations['angles'] as List;
+            print("Загружаем ${anglesList.length} углов");
+            _completedAngles = anglesList.map((angle) {
+              return AngleMeasurement(
+                vertex: Offset(
+                  (angle['vertexX'] ?? 0.0).toDouble(),
+                  (angle['vertexY'] ?? 0.0).toDouble(),
+                ),
+                point1: Offset(
+                  (angle['point1X'] ?? 0.0).toDouble(),
+                  (angle['point1Y'] ?? 0.0).toDouble(),
+                ),
+                point2: Offset(
+                  (angle['point2X'] ?? 0.0).toDouble(),
+                  (angle['point2Y'] ?? 0.0).toDouble(),
+                ),
+              );
+            }).toList();
+          }
+          
+          // Загружаем текстовые аннотации (преобразуем из относительных координат в абсолютные)
+          if (annotations.containsKey('texts') && annotations['texts'] is List) {
+            final textsList = annotations['texts'] as List;
+            print("Загружаем ${textsList.length} текстовых аннотаций");
+            final canvasSize = _getCanvasSize();
+            // Если canvas еще не готов, используем размер изображения
+            final size = canvasSize.width > 0 && canvasSize.height > 0 
+                ? canvasSize 
+                : (_decodedImage != null 
+                    ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
+                    : const Size(1000, 1000)); // Fallback размер
+            print("Размер для преобразования координат: ${size.width}x${size.height}");
+            
+            _textAnnotations = textsList.map((text) {
+              // Проверяем, сохранены ли координаты в относительном формате (0.0-1.0) или абсолютном
+              final x = (text['x'] ?? 0.0).toDouble();
+              final y = (text['y'] ?? 0.0).toDouble();
+              // Если координаты больше 1.0, значит они в абсолютном формате (старый формат)
+              // Иначе преобразуем из относительных в абсолютные
+              final absX = x > 1.0 ? x : x * size.width;
+              final absY = y > 1.0 ? y : y * size.height;
+              
+              return TextAnnotation(
+                position: Offset(absX, absY),
+                text: text['text'] ?? '',
+                color: Color(text['color'] ?? Colors.yellow.value),
+                fontSize: (text['fontSize'] ?? 16.0).toDouble(),
+              );
+            }).toList();
+          }
+          
+          // Загружаем стрелки (преобразуем из относительных координат в абсолютные)
+          if (annotations.containsKey('arrows') && annotations['arrows'] is List) {
+            final arrowsList = annotations['arrows'] as List;
+            print("Загружаем ${arrowsList.length} стрелок");
+            final canvasSize = _getCanvasSize();
+            // Если canvas еще не готов, используем размер изображения
+            final size = canvasSize.width > 0 && canvasSize.height > 0 
+                ? canvasSize 
+                : (_decodedImage != null 
+                    ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
+                    : const Size(1000, 1000)); // Fallback размер
+            print("Размер для преобразования координат стрелок: ${size.width}x${size.height}");
+            
+            _arrowAnnotations = arrowsList.map((arrow) {
+              // Проверяем, сохранены ли координаты в относительном формате (0.0-1.0) или абсолютном
+              final x1 = (arrow['x1'] ?? 0.0).toDouble();
+              final y1 = (arrow['y1'] ?? 0.0).toDouble();
+              final x2 = (arrow['x2'] ?? 0.0).toDouble();
+              final y2 = (arrow['y2'] ?? 0.0).toDouble();
+              // Если координаты больше 1.0, значит они в абсолютном формате (старый формат)
+              // Иначе преобразуем из относительных в абсолютные
+              final absX1 = x1 > 1.0 ? x1 : x1 * size.width;
+              final absY1 = y1 > 1.0 ? y1 : y1 * size.height;
+              final absX2 = x2 > 1.0 ? x2 : x2 * size.width;
+              final absY2 = y2 > 1.0 ? y2 : y2 * size.height;
+              
+              return ArrowAnnotation(
+                start: Offset(absX1, absY1),
+                end: Offset(absX2, absY2),
+                color: Color(arrow['color'] ?? Colors.red.value),
+                strokeWidth: (arrow['strokeWidth'] ?? 3.0).toDouble(),
+              );
+            }).toList();
+          }
+        }
+        
+        // Загружаем настройки вида
+        if (data.containsKey('view_settings') && data['view_settings'] is Map) {
+          final viewSettings = data['view_settings'] as Map<String, dynamic>;
+          if (viewSettings.containsKey('brightness')) {
+            _brightness = (viewSettings['brightness'] ?? 1.0).toDouble();
+            _initialBrightness = _brightness;
+          }
+          if (viewSettings.containsKey('inverted')) {
+            _isInverted = viewSettings['inverted'] ?? false;
+            _initialInverted = _isInverted;
+          }
+          if (viewSettings.containsKey('rotation_deg')) {
+            _rotationAngle = (viewSettings['rotation_deg'] ?? 0.0).toDouble();
+            _initialRotationAngle = _rotationAngle;
+          }
+        }
       });
       
-      print("Метаданные загружены из файла: ${file.path}");
+      print("Метаданные и аннотации загружены из файла: ${file.path}");
+      print("Загружено линеек: ${_completedRulerLines.length}, углов: ${_completedAngles.length}, текстов: ${_textAnnotations.length}, стрелок: ${_arrowAnnotations.length}");
     } catch (e) {
       print("Ошибка при загрузке метаданных: $e");
       // Не показываем ошибку пользователю, так как это не критично
@@ -2851,54 +2998,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         'inverted': _isInverted,
         'brightness': _brightness,
       });
-      request.fields['annotations'] = annotations;
+      // НЕ отправляем аннотации на сервер - они остаются отдельным редактируемым слоем
+      // Аннотации сохраняются только в JSON файл локально
+      // request.fields['annotations'] = annotations; // Закомментировано - аннотации не встраиваются в DICOM
 
-      // Добавляем готовый PNG-рендер из области RepaintBoundary, чтобы DICOM совпадал 1:1
-      // Используем исходный размер изображения из DICOM для масштабирования
-      final boundary = _captureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-      if (boundary != null) {
-        // Получаем исходный размер изображения из DICOM тегов или из декодированного изображения
-        double targetWidth = 0;
-        double targetHeight = 0;
-        
-        // Пытаемся получить размер из DICOM тегов
-        if (_dicomTags.containsKey('Columns') && _dicomTags.containsKey('Rows')) {
-          try {
-            targetWidth = double.parse(_dicomTags['Columns']!);
-            targetHeight = double.parse(_dicomTags['Rows']!);
-          } catch (e) {
-            print("Ошибка парсинга размеров из DICOM тегов: $e");
-          }
-        }
-        
-        // Если не удалось получить из тегов, используем размер декодированного изображения
-        if (targetWidth == 0 || targetHeight == 0) {
-          if (_decodedImage != null) {
-            targetWidth = _decodedImage!.width.toDouble();
-            targetHeight = _decodedImage!.height.toDouble();
-          }
-        }
-        
-        // Получаем размер canvas
-        // boundary уже является RenderRepaintBoundary, который наследуется от RenderBox
-        final canvasSize = boundary.size;
-        
-        // Вычисляем pixelRatio для масштабирования до исходного размера
-        double pixelRatio = 1.0;
-        if (targetWidth > 0 && targetHeight > 0 && canvasSize.width > 0 && canvasSize.height > 0) {
-          // Используем максимальное соотношение, чтобы изображение было не меньше исходного размера
-          final ratioX = targetWidth / canvasSize.width;
-          final ratioY = targetHeight / canvasSize.height;
-          pixelRatio = ratioX > ratioY ? ratioX : ratioY;
-        }
-        
-        final image = await boundary.toImage(pixelRatio: pixelRatio);
-        final pngData = await image.toByteData(format: ui.ImageByteFormat.png);
-        if (pngData != null) {
-          final pngBytes = pngData.buffer.asUint8List();
-          request.files.add(http.MultipartFile.fromBytes('render', pngBytes, filename: 'render.png'));
-        }
-      }
+      // Сохраняем метаданные и аннотации в JSON перед экспортом DICOM
+      // Аннотации сохраняются отдельно в JSON и не встраиваются в DICOM
+      await _saveMetadata();
+      
+      // НЕ отправляем render с аннотациями - аннотации остаются отдельным редактируемым слоем
+      // DICOM экспортируется БЕЗ аннотаций, аннотации загружаются отдельно из JSON при открытии файла
+      
       final streamed = await request.send();
       final body = await streamed.stream.bytesToString();
       if (streamed.statusCode == 200) {
