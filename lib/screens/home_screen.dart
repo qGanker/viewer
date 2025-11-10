@@ -67,17 +67,24 @@ class AnnotationPainter extends CustomPainter {
   final List<TextAnnotation> textAnnotations;
   final List<ArrowAnnotation> arrowAnnotations;
   final List<Offset> arrowPoints; // Промежуточные точки для предварительного просмотра
+  final int? selectedTextIndex; // Индекс выбранной текстовой аннотации
+  final int? selectedArrowIndex; // Индекс выбранной стрелки
   
   AnnotationPainter({
     required this.textAnnotations,
     required this.arrowAnnotations,
     this.arrowPoints = const [],
+    this.selectedTextIndex,
+    this.selectedArrowIndex,
   });
   
   @override
   void paint(Canvas canvas, Size size) {
     // Рисуем текстовые аннотации
-    for (var annotation in textAnnotations) {
+    for (int i = 0; i < textAnnotations.length; i++) {
+      final annotation = textAnnotations[i];
+      final isSelected = selectedTextIndex == i;
+      
       final textPainter = TextPainter(
         text: TextSpan(
           text: annotation.text,
@@ -100,14 +107,85 @@ class AnnotationPainter extends CustomPainter {
       );
       canvas.drawRect(bgRect, Paint()..color = Colors.black87);
       
+      // Рисуем рамку выделения, если аннотация выбрана
+      if (isSelected) {
+        final selectionRect = Rect.fromLTWH(
+          annotation.position.dx - 8,
+          annotation.position.dy - 5,
+          textPainter.width + 16,
+          textPainter.height + 10,
+        );
+        canvas.drawRect(selectionRect, Paint()
+          ..color = Colors.orange
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.0);
+        
+        // Рисуем индикатор перетаскивания (квадратик со стрелочками) сверху над аннотацией
+        final dragHandleSize = 20.0;
+        final dragHandleX = annotation.position.dx + textPainter.width / 2 - dragHandleSize / 2;
+        final dragHandleY = annotation.position.dy - dragHandleSize - 5;
+        final dragHandleRect = Rect.fromLTWH(dragHandleX, dragHandleY, dragHandleSize, dragHandleSize);
+        
+        // Рисуем фон индикатора
+        canvas.drawRect(dragHandleRect, Paint()
+          ..color = Colors.orange
+          ..style = PaintingStyle.fill);
+        canvas.drawRect(dragHandleRect, Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5);
+        
+        // Рисуем стрелочки (крестик из стрелок)
+        final centerX = dragHandleX + dragHandleSize / 2;
+        final centerY = dragHandleY + dragHandleSize / 2;
+        final arrowSize = 6.0;
+        
+        // Верхняя стрелка
+        canvas.drawLine(
+          Offset(centerX, centerY - arrowSize),
+          Offset(centerX, centerY),
+          Paint()..color = Colors.white..strokeWidth = 2.0
+        );
+        canvas.drawLine(
+          Offset(centerX - 2, centerY - 2),
+          Offset(centerX, centerY),
+          Paint()..color = Colors.white..strokeWidth = 2.0
+        );
+        canvas.drawLine(
+          Offset(centerX + 2, centerY - 2),
+          Offset(centerX, centerY),
+          Paint()..color = Colors.white..strokeWidth = 2.0
+        );
+        
+        // Нижняя стрелка
+        canvas.drawLine(
+          Offset(centerX, centerY),
+          Offset(centerX, centerY + arrowSize),
+          Paint()..color = Colors.white..strokeWidth = 2.0
+        );
+        canvas.drawLine(
+          Offset(centerX, centerY),
+          Offset(centerX - 2, centerY + 2),
+          Paint()..color = Colors.white..strokeWidth = 2.0
+        );
+        canvas.drawLine(
+          Offset(centerX, centerY),
+          Offset(centerX + 2, centerY + 2),
+          Paint()..color = Colors.white..strokeWidth = 2.0
+        );
+      }
+      
       textPainter.paint(canvas, annotation.position);
     }
     
     // Рисуем стрелки
-    for (var arrow in arrowAnnotations) {
+    for (int i = 0; i < arrowAnnotations.length; i++) {
+      final arrow = arrowAnnotations[i];
+      final isSelected = selectedArrowIndex == i;
+      
       final paint = Paint()
-        ..color = arrow.color
-        ..strokeWidth = arrow.strokeWidth
+        ..color = isSelected ? Colors.orange : arrow.color
+        ..strokeWidth = isSelected ? arrow.strokeWidth + 1.0 : arrow.strokeWidth
         ..style = PaintingStyle.stroke;
       
       // Рисуем основную линию
@@ -398,6 +476,62 @@ class RulerPainter extends CustomPainter {
     canvas.drawRect(bgRect, Paint()..color = Colors.black87);
     
     textPainter.paint(canvas, textOffset);
+    
+    // Рисуем индикатор перетаскивания для выбранной линейки
+    if (isSelected) {
+      final dragHandleSize = 20.0;
+      final dragHandleX = (start.dx + end.dx) / 2 - dragHandleSize / 2;
+      final dragHandleY = (start.dy + end.dy) / 2 - dragHandleSize - 5;
+      final dragHandleRect = Rect.fromLTWH(dragHandleX, dragHandleY, dragHandleSize, dragHandleSize);
+      
+      // Рисуем фон индикатора
+      canvas.drawRect(dragHandleRect, Paint()
+        ..color = Colors.orange
+        ..style = PaintingStyle.fill);
+      canvas.drawRect(dragHandleRect, Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5);
+      
+      // Рисуем стрелочки (крестик из стрелок)
+      final centerX = dragHandleX + dragHandleSize / 2;
+      final centerY = dragHandleY + dragHandleSize / 2;
+      final arrowSize = 6.0;
+      
+      // Верхняя стрелка
+      canvas.drawLine(
+        Offset(centerX, centerY - arrowSize),
+        Offset(centerX, centerY),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX - 2, centerY - 2),
+        Offset(centerX, centerY),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX + 2, centerY - 2),
+        Offset(centerX, centerY),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      
+      // Нижняя стрелка
+      canvas.drawLine(
+        Offset(centerX, centerY),
+        Offset(centerX, centerY + arrowSize),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX, centerY),
+        Offset(centerX - 2, centerY + 2),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX, centerY),
+        Offset(centerX + 2, centerY + 2),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+    }
   }
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
@@ -549,6 +683,62 @@ class AnglePainter extends CustomPainter {
     canvas.drawRect(bgRect, Paint()..color = Colors.black87);
     
     textPainter.paint(canvas, textOffset);
+    
+    // Рисуем индикатор перетаскивания для выбранного угла
+    if (isSelected) {
+      final dragHandleSize = 20.0;
+      final dragHandleX = vertex.dx - dragHandleSize / 2;
+      final dragHandleY = vertex.dy - dragHandleSize - 5;
+      final dragHandleRect = Rect.fromLTWH(dragHandleX, dragHandleY, dragHandleSize, dragHandleSize);
+      
+      // Рисуем фон индикатора
+      canvas.drawRect(dragHandleRect, Paint()
+        ..color = Colors.orange
+        ..style = PaintingStyle.fill);
+      canvas.drawRect(dragHandleRect, Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5);
+      
+      // Рисуем стрелочки (крестик из стрелок)
+      final centerX = dragHandleX + dragHandleSize / 2;
+      final centerY = dragHandleY + dragHandleSize / 2;
+      final arrowSize = 6.0;
+      
+      // Верхняя стрелка
+      canvas.drawLine(
+        Offset(centerX, centerY - arrowSize),
+        Offset(centerX, centerY),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX - 2, centerY - 2),
+        Offset(centerX, centerY),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX + 2, centerY - 2),
+        Offset(centerX, centerY),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      
+      // Нижняя стрелка
+      canvas.drawLine(
+        Offset(centerX, centerY),
+        Offset(centerX, centerY + arrowSize),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX, centerY),
+        Offset(centerX - 2, centerY + 2),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX, centerY),
+        Offset(centerX + 2, centerY + 2),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+    }
   }
   
   @override
@@ -916,9 +1106,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // Выделение и перетаскивание
   int? _selectedRulerIndex; // Индекс выбранной линейки
   int? _selectedAngleIndex; // Индекс выбранного угла
+  int? _selectedTextIndex; // Индекс выбранной текстовой аннотации
+  int? _selectedArrowIndex; // Индекс выбранной стрелки
   bool _isDraggingRuler = false; // Флаг перетаскивания линейки
   bool _isDraggingAngle = false; // Флаг перетаскивания угла
+  bool _isDraggingText = false; // Флаг перетаскивания текстовой аннотации
+  bool _isDraggingArrow = false; // Флаг перетаскивания стрелки
   Offset? _dragOffset; // Смещение при перетаскивании
+  bool _hasMeasurementNearPointer = false; // Флаг наличия измерения рядом с указателем (для блокировки pan)
   
   // Лупа: позиция курсора для отображения увеличенной области
   Offset? _magnifierPosition;
@@ -1082,8 +1277,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _isMagnifierPressed = false; // Сбрасываем флаг зажатой ЛКМ
       _selectedRulerIndex = null; // Сбрасываем выделение линеек
       _selectedAngleIndex = null; // Сбрасываем выделение углов
+      _selectedTextIndex = null; // Сбрасываем выделение текстовых аннотаций
+      _selectedArrowIndex = null; // Сбрасываем выделение стрелок
       _isDraggingRuler = false;
       _isDraggingAngle = false;
+      _isDraggingText = false;
+      _isDraggingArrow = false;
       _dragOffset = null;
       
       // Переключаем инструмент
@@ -1463,6 +1662,98 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return null;
   }
   
+  // Проверяет, находится ли точка рядом с текстовой аннотацией
+  int? _getTextAnnotationAtPoint(Offset point, double threshold) {
+    for (int i = _textAnnotations.length - 1; i >= 0; i--) {
+      final annotation = _textAnnotations[i];
+      final distance = (point - annotation.position).distance;
+      // Увеличиваем хитбокс - учитываем размер текста
+      if (distance <= threshold) {
+        return i;
+      }
+    }
+    return null;
+  }
+  
+  // Проверяет, находится ли точка рядом со стрелкой
+  int? _getArrowAnnotationAtPoint(Offset point, double threshold) {
+    for (int i = _arrowAnnotations.length - 1; i >= 0; i--) {
+      final arrow = _arrowAnnotations[i];
+      final distToLine = _pointToLineDistance(point, arrow.start, arrow.end);
+      if (distToLine <= threshold) {
+        return i;
+      }
+    }
+    return null;
+  }
+  
+  // Проверяет, находится ли точка на индикаторе перетаскивания текстовой аннотации
+  bool _isPointOnTextDragHandle(Offset point, int textIndex) {
+    if (textIndex < 0 || textIndex >= _textAnnotations.length) return false;
+    final annotation = _textAnnotations[textIndex];
+    final textPainter = TextPainter(
+      text: TextSpan(text: annotation.text, style: TextStyle(fontSize: annotation.fontSize)),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    
+    // Увеличенный хитбокс для лучшего UX
+    final dragHandleSize = 50.0;
+    final dragHandleX = annotation.position.dx + textPainter.width / 2 - dragHandleSize / 2;
+    final dragHandleY = annotation.position.dy - dragHandleSize - 5;
+    final dragHandleRect = Rect.fromLTWH(dragHandleX, dragHandleY, dragHandleSize, dragHandleSize);
+    
+    return dragHandleRect.contains(point);
+  }
+  
+  // Проверяет, находится ли точка на индикаторе перетаскивания стрелки
+  bool _isPointOnArrowDragHandle(Offset point, int arrowIndex) {
+    if (arrowIndex < 0 || arrowIndex >= _arrowAnnotations.length) return false;
+    final arrow = _arrowAnnotations[arrowIndex];
+    
+    // Увеличенный хитбокс для лучшего UX
+    final dragHandleSize = 50.0;
+    final centerX = (arrow.start.dx + arrow.end.dx) / 2;
+    final centerY = (arrow.start.dy + arrow.end.dy) / 2;
+    final dragHandleX = centerX - dragHandleSize / 2;
+    final dragHandleY = centerY - dragHandleSize - 5;
+    final dragHandleRect = Rect.fromLTWH(dragHandleX, dragHandleY, dragHandleSize, dragHandleSize);
+    
+    return dragHandleRect.contains(point);
+  }
+  
+  // Проверяет, находится ли точка на индикаторе перетаскивания линейки
+  bool _isPointOnRulerDragHandle(Offset point, int rulerIndex) {
+    if (rulerIndex < 0 || rulerIndex >= _completedRulerLines.length) return false;
+    final canvasSize = _getCanvasSize();
+    final line = _completedRulerLines[rulerIndex];
+    final absStart = line.getAbsoluteStart(canvasSize);
+    final absEnd = line.getAbsoluteEnd(canvasSize);
+    
+    // Увеличенный хитбокс для лучшего UX
+    final dragHandleSize = 50.0;
+    final dragHandleX = (absStart.dx + absEnd.dx) / 2 - dragHandleSize / 2;
+    final dragHandleY = (absStart.dy + absEnd.dy) / 2 - dragHandleSize - 5;
+    final dragHandleRect = Rect.fromLTWH(dragHandleX, dragHandleY, dragHandleSize, dragHandleSize);
+    
+    return dragHandleRect.contains(point);
+  }
+  
+  // Проверяет, находится ли точка на индикаторе перетаскивания угла
+  bool _isPointOnAngleDragHandle(Offset point, int angleIndex) {
+    if (angleIndex < 0 || angleIndex >= _completedAngles.length) return false;
+    final canvasSize = _getCanvasSize();
+    final angle = _completedAngles[angleIndex];
+    final absVertex = angle.getAbsoluteVertex(canvasSize);
+    
+    // Увеличенный хитбокс для лучшего UX
+    final dragHandleSize = 50.0;
+    final dragHandleX = absVertex.dx - dragHandleSize / 2;
+    final dragHandleY = absVertex.dy - dragHandleSize - 5;
+    final dragHandleRect = Rect.fromLTWH(dragHandleX, dragHandleY, dragHandleSize, dragHandleSize);
+    
+    return dragHandleRect.contains(point);
+  }
+  
   // Вычисляет расстояние от точки до линии
   double _pointToLineDistance(Offset point, Offset lineStart, Offset lineEnd) {
     final A = point.dx - lineStart.dx;
@@ -1496,35 +1787,86 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
     
-    // Проверяем клик на существующие линии/углы (если не в режиме создания)
-    if (_currentTool == ToolMode.ruler && _rulerPoints.isEmpty) {
-      final rulerIndex = _getRulerLineAtPoint(sceneOffset, 10.0);
+    // Проверяем клик на существующие линии/углы (в любом режиме, кроме создания новых)
+    if (_rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
+      // Проверяем клик на линейки (увеличенный хитбокс)
+      final rulerIndex = _getRulerLineAtPoint(sceneOffset, 30.0);
       if (rulerIndex != null) {
         setState(() {
-          _selectedRulerIndex = _selectedRulerIndex == rulerIndex ? null : rulerIndex;
-          _selectedAngleIndex = null; // Снимаем выделение с углов
+          // Не снимаем выделение при повторном клике, только переключаем если выбрана другая
+          if (_selectedRulerIndex != rulerIndex) {
+            _selectedRulerIndex = rulerIndex;
+            _selectedAngleIndex = null;
+            _selectedTextIndex = null;
+            _selectedArrowIndex = null;
+          }
+          // Если уже выбрана та же линейка, не снимаем выделение
         });
         return;
-      } else {
-        setState(() {
-          _selectedRulerIndex = null;
-        });
       }
-    }
-    
-    if (_currentTool == ToolMode.angle && _anglePoints.isEmpty) {
-      final angleIndex = _getAngleAtPoint(sceneOffset, 10.0);
+      
+      // Проверяем клик на углы (увеличенный хитбокс)
+      final angleIndex = _getAngleAtPoint(sceneOffset, 30.0);
       if (angleIndex != null) {
         setState(() {
-          _selectedAngleIndex = _selectedAngleIndex == angleIndex ? null : angleIndex;
-          _selectedRulerIndex = null; // Снимаем выделение с линеек
+          // Не снимаем выделение при повторном клике, только переключаем если выбран другой
+          if (_selectedAngleIndex != angleIndex) {
+            _selectedAngleIndex = angleIndex;
+            _selectedRulerIndex = null;
+            _selectedTextIndex = null;
+            _selectedArrowIndex = null;
+          }
+          // Если уже выбран тот же угол, не снимаем выделение
         });
         return;
-      } else {
-        setState(() {
-          _selectedAngleIndex = null;
-        });
       }
+      
+      // Если клик не на линейку или угол, снимаем их выделение
+      setState(() {
+        _selectedRulerIndex = null;
+        _selectedAngleIndex = null;
+      });
+    }
+    
+    // Проверяем клик на текстовые аннотации и стрелки (в любом режиме, кроме создания новых)
+    if (_rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
+      // Проверяем клик на текстовые аннотации (увеличенный хитбокс)
+      final textIndex = _getTextAnnotationAtPoint(sceneOffset, 50.0);
+      if (textIndex != null) {
+        setState(() {
+          // Не снимаем выделение при повторном клике, только переключаем если выбрана другая
+          if (_selectedTextIndex != textIndex) {
+            _selectedTextIndex = textIndex;
+            _selectedRulerIndex = null;
+            _selectedAngleIndex = null;
+            _selectedArrowIndex = null;
+          }
+          // Если уже выбрана та же аннотация, не снимаем выделение
+        });
+        return;
+      }
+      
+      // Проверяем клик на стрелки (увеличенный хитбокс)
+      final arrowIndex = _getArrowAnnotationAtPoint(sceneOffset, 30.0);
+      if (arrowIndex != null) {
+        setState(() {
+          // Не снимаем выделение при повторном клике, только переключаем если выбрана другая
+          if (_selectedArrowIndex != arrowIndex) {
+            _selectedArrowIndex = arrowIndex;
+            _selectedRulerIndex = null;
+            _selectedAngleIndex = null;
+            _selectedTextIndex = null;
+          }
+          // Если уже выбрана та же стрелка, не снимаем выделение
+        });
+        return;
+      }
+      
+      // Если клик не на аннотацию, снимаем выделение
+      setState(() {
+        _selectedTextIndex = null;
+        _selectedArrowIndex = null;
+      });
     }
     
     // Обрабатываем клик для инструмента угла
@@ -1692,6 +2034,51 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  // Проверяет, есть ли измерение рядом с указателем (для раннего отключения pan)
+  bool _checkMeasurementNearPointer(Offset localPosition) {
+    if (_rulerPoints.isNotEmpty || _anglePoints.isNotEmpty || _arrowPoints.isNotEmpty) {
+      return false; // Если создаются новые измерения, не блокируем pan
+    }
+    
+    if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+      _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+      _matrixCacheValid = true;
+    }
+    final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, localPosition);
+    
+    // Проверяем drag handles
+    if (_selectedRulerIndex != null && _isPointOnRulerDragHandle(sceneOffset, _selectedRulerIndex!)) {
+      return true;
+    }
+    if (_selectedAngleIndex != null && _isPointOnAngleDragHandle(sceneOffset, _selectedAngleIndex!)) {
+      return true;
+    }
+    if (_selectedTextIndex != null && _isPointOnTextDragHandle(sceneOffset, _selectedTextIndex!)) {
+      return true;
+    }
+    if (_selectedArrowIndex != null && _isPointOnArrowDragHandle(sceneOffset, _selectedArrowIndex!)) {
+      return true;
+    }
+    
+    // Проверяем наличие линеек и углов рядом
+    if (_getRulerLineAtPoint(sceneOffset, 60.0) != null) {
+      return true;
+    }
+    if (_getAngleAtPoint(sceneOffset, 60.0) != null) {
+      return true;
+    }
+    
+    // Проверяем наличие текстовых аннотаций и стрелок рядом
+    if (_getTextAnnotationAtPoint(sceneOffset, 50.0) != null) {
+      return true;
+    }
+    if (_getArrowAnnotationAtPoint(sceneOffset, 30.0) != null) {
+      return true;
+    }
+    
+    return false;
+  }
+
   void _handlePanStart(DragStartDetails details) {
     // Используем кэшированную матрицу для производительности
     if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
@@ -1700,9 +2087,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
     
-    // Если не создаются новые измерения, проверяем возможность перетаскивания существующих
-    // Перетаскивание работает в любом режиме инструмента, кроме режима создания новых измерений
-    if (_rulerPoints.isEmpty && _anglePoints.isEmpty) {
+    // ПРИОРИТЕТ 1: Проверяем перетаскивание измерений (линеек и углов) в любом режиме
+    // Это должно быть в самом начале, чтобы перетаскивание измерений имело приоритет над стандартным pan
+    // Работает независимо от режима инструмента, но только если не создаются новые измерения
+    if (_rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
+      // Проверяем индикатор перетаскивания текстовой аннотации
+      if (_selectedTextIndex != null && _isPointOnTextDragHandle(sceneOffset, _selectedTextIndex!)) {
+        setState(() {
+          _isDraggingText = true;
+          _dragOffset = sceneOffset;
+        });
+        return;
+      }
+      
+      // Проверяем индикатор перетаскивания стрелки
+      if (_selectedArrowIndex != null && _isPointOnArrowDragHandle(sceneOffset, _selectedArrowIndex!)) {
+        setState(() {
+          _isDraggingArrow = true;
+          _dragOffset = sceneOffset;
+        });
+        return;
+      }
+      
+      // Проверяем индикатор перетаскивания линейки
+      if (_selectedRulerIndex != null && _isPointOnRulerDragHandle(sceneOffset, _selectedRulerIndex!)) {
+        setState(() {
+          _isDraggingRuler = true;
+          _dragOffset = sceneOffset;
+          _hasMeasurementNearPointer = true; // Блокируем pan
+        });
+        return;
+      }
+      
+      // Проверяем индикатор перетаскивания угла
+      if (_selectedAngleIndex != null && _isPointOnAngleDragHandle(sceneOffset, _selectedAngleIndex!)) {
+        setState(() {
+          _isDraggingAngle = true;
+          _dragOffset = sceneOffset;
+          _hasMeasurementNearPointer = true; // Блокируем pan
+        });
+        return;
+      }
+    }
+    
+    // ПРИОРИТЕТ 2: Если не создаются новые измерения, проверяем возможность перетаскивания существующих
+    // Перетаскивание работает в ЛЮБОМ режиме инструмента (включая pan), кроме режима создания новых измерений
+    // Это гарантирует, что перетаскивание измерений имеет приоритет над стандартным перетаскиванием изображения
+    if (_rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
       // Сначала проверяем перетаскивание линеек (даже если не выбраны)
       // Если линейка уже выбрана, проверяем её
       if (_selectedRulerIndex != null) {
@@ -1711,29 +2142,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final absStart = line.getAbsoluteStart(canvasSize);
         final absEnd = line.getAbsoluteEnd(canvasSize);
         final distToLine = _pointToLineDistance(sceneOffset, absStart, absEnd);
-        if (distToLine <= 15.0) {
+        // Увеличенный threshold для лучшего UX
+        if (distToLine <= 60.0) {
           setState(() {
             _isDraggingRuler = true;
             _dragOffset = sceneOffset;
+            _hasMeasurementNearPointer = true; // Блокируем pan
           });
           return;
         }
       }
       
-      // Ищем ближайшую линейку, если ничего не выбрано
-      final rulerIndex = _getRulerLineAtPoint(sceneOffset, 15.0);
+      // Ищем ближайшую линейку, если ничего не выбрано (увеличенный хитбокс)
+      final rulerIndex = _getRulerLineAtPoint(sceneOffset, 60.0);
       if (rulerIndex != null) {
         setState(() {
           _selectedRulerIndex = rulerIndex;
           _selectedAngleIndex = null;
+          _selectedTextIndex = null;
+          _selectedArrowIndex = null;
           _isDraggingRuler = true;
           _dragOffset = sceneOffset;
+          _hasMeasurementNearPointer = true; // Блокируем pan
         });
         return;
       }
       
       // Проверяем перетаскивание углов (даже если не выбраны)
-      // Если угол уже выбран, проверяем его
+      // Если угол уже выбран, проверяем его (увеличенный хитбокс)
       if (_selectedAngleIndex != null) {
         final canvasSize = _getCanvasSize();
         final angle = _completedAngles[_selectedAngleIndex!];
@@ -1746,23 +2182,56 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final distToRay1 = _pointToLineDistance(sceneOffset, absVertex, absPoint1);
         final distToRay2 = _pointToLineDistance(sceneOffset, absVertex, absPoint2);
         
-        if (distToVertex <= 20.0 || distToPoint1 <= 20.0 || distToPoint2 <= 20.0 || 
-            distToRay1 <= 15.0 || distToRay2 <= 15.0) {
+        // Увеличенный threshold для лучшего UX
+        if (distToVertex <= 60.0 || distToPoint1 <= 60.0 || distToPoint2 <= 60.0 || 
+            distToRay1 <= 60.0 || distToRay2 <= 60.0) {
           setState(() {
             _isDraggingAngle = true;
             _dragOffset = sceneOffset;
+            _hasMeasurementNearPointer = true; // Блокируем pan
           });
           return;
         }
       }
       
-      // Ищем ближайший угол, если ничего не выбрано
-      final angleIndex = _getAngleAtPoint(sceneOffset, 15.0);
+      // Ищем ближайший угол, если ничего не выбрано (увеличенный хитбокс)
+      final angleIndex = _getAngleAtPoint(sceneOffset, 60.0);
       if (angleIndex != null) {
         setState(() {
           _selectedAngleIndex = angleIndex;
           _selectedRulerIndex = null;
+          _selectedTextIndex = null;
+          _selectedArrowIndex = null;
           _isDraggingAngle = true;
+          _dragOffset = sceneOffset;
+          _hasMeasurementNearPointer = true; // Блокируем pan
+        });
+        return;
+      }
+      
+      // Проверяем перетаскивание текстовых аннотаций (увеличенный хитбокс)
+      final textIndex = _getTextAnnotationAtPoint(sceneOffset, 50.0);
+      if (textIndex != null) {
+        setState(() {
+          _selectedTextIndex = textIndex;
+          _selectedRulerIndex = null;
+          _selectedAngleIndex = null;
+          _selectedArrowIndex = null;
+          _isDraggingText = true;
+          _dragOffset = sceneOffset;
+        });
+        return;
+      }
+      
+      // Проверяем перетаскивание стрелок (увеличенный хитбокс)
+      final arrowIndex = _getArrowAnnotationAtPoint(sceneOffset, 30.0);
+      if (arrowIndex != null) {
+        setState(() {
+          _selectedArrowIndex = arrowIndex;
+          _selectedRulerIndex = null;
+          _selectedAngleIndex = null;
+          _selectedTextIndex = null;
+          _isDraggingArrow = true;
           _dragOffset = sceneOffset;
         });
         return;
@@ -1865,6 +2334,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     
+    // Обрабатываем перетаскивание текстовых аннотаций
+    if (_isDraggingText && _selectedTextIndex != null && _dragOffset != null) {
+      final deltaScene = sceneOffset - _dragOffset!;
+      setState(() {
+        final annotation = _textAnnotations[_selectedTextIndex!];
+        _textAnnotations[_selectedTextIndex!] = TextAnnotation(
+          position: Offset(annotation.position.dx + deltaScene.dx, annotation.position.dy + deltaScene.dy),
+          text: annotation.text,
+          color: annotation.color,
+          fontSize: annotation.fontSize,
+        );
+        _dragOffset = sceneOffset;
+      });
+      return;
+    }
+    
+    // Обрабатываем перетаскивание стрелок
+    if (_isDraggingArrow && _selectedArrowIndex != null && _dragOffset != null) {
+      final deltaScene = sceneOffset - _dragOffset!;
+      setState(() {
+        final arrow = _arrowAnnotations[_selectedArrowIndex!];
+        _arrowAnnotations[_selectedArrowIndex!] = ArrowAnnotation(
+          start: Offset(arrow.start.dx + deltaScene.dx, arrow.start.dy + deltaScene.dy),
+          end: Offset(arrow.end.dx + deltaScene.dx, arrow.end.dy + deltaScene.dy),
+          color: arrow.color,
+          strokeWidth: arrow.strokeWidth,
+        );
+        _dragOffset = sceneOffset;
+      });
+      return;
+    }
+    
     if (_currentTool != ToolMode.annotation) return;
     
     // Оптимизированное обновление без лишних setState
@@ -1883,12 +2384,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _handlePanEnd(DragEndDetails details) {
-    // Сбрасываем флаги перетаскивания линеек и углов
-    if (_isDraggingRuler || _isDraggingAngle) {
+    // Сбрасываем флаги перетаскивания линеек, углов, текстовых аннотаций и стрелок
+    if (_isDraggingRuler || _isDraggingAngle || _isDraggingText || _isDraggingArrow) {
       setState(() {
         _isDraggingRuler = false;
         _isDraggingAngle = false;
+        _isDraggingText = false;
+        _isDraggingArrow = false;
         _dragOffset = null;
+        _hasMeasurementNearPointer = false;
       });
       return;
     }
@@ -2829,9 +3333,285 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               _handlePointerExit(event);
                                             } : null,
                                             child: Listener(
-                                              onPointerDown: _currentTool == ToolMode.magnifier ? _handlePointerDown : null,
-                                              onPointerUp: _currentTool == ToolMode.magnifier ? _handlePointerUp : null,
-                                              onPointerMove: _currentTool == ToolMode.magnifier ? _handlePointerMove : null,
+                                              onPointerDown: (PointerDownEvent event) {
+                                                // Ранний перехват для проверки измерений и блокировки pan
+                                                if (_currentTool == ToolMode.magnifier) {
+                                                  _handlePointerDown(event);
+                                                } else {
+                                                  // Проверяем наличие измерений рядом с указателем
+                                                  final hasMeasurement = _checkMeasurementNearPointer(event.localPosition);
+                                                  if (hasMeasurement != _hasMeasurementNearPointer) {
+                                                    setState(() {
+                                                      _hasMeasurementNearPointer = hasMeasurement;
+                                                    });
+                                                  }
+                                                  
+                                                  // Если есть измерение рядом, начинаем перетаскивание напрямую через Listener
+                                                  if (hasMeasurement && _rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
+                                                    if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                      _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                      _matrixCacheValid = true;
+                                                    }
+                                                    final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                    
+                                                    // Проверяем и начинаем перетаскивание линеек
+                                                    if (_selectedRulerIndex != null && _isPointOnRulerDragHandle(sceneOffset, _selectedRulerIndex!)) {
+                                                      setState(() {
+                                                        _isDraggingRuler = true;
+                                                        _dragOffset = sceneOffset;
+                                                        _hasMeasurementNearPointer = true;
+                                                      });
+                                                      return;
+                                                    }
+                                                    
+                                                    final rulerIndex = _getRulerLineAtPoint(sceneOffset, 60.0);
+                                                    if (rulerIndex != null) {
+                                                      setState(() {
+                                                        _selectedRulerIndex = rulerIndex;
+                                                        _selectedAngleIndex = null;
+                                                        _selectedTextIndex = null;
+                                                        _selectedArrowIndex = null;
+                                                        _isDraggingRuler = true;
+                                                        _dragOffset = sceneOffset;
+                                                        _hasMeasurementNearPointer = true;
+                                                      });
+                                                      return;
+                                                    }
+                                                    
+                                                    // Проверяем и начинаем перетаскивание углов
+                                                    if (_selectedAngleIndex != null && _isPointOnAngleDragHandle(sceneOffset, _selectedAngleIndex!)) {
+                                                      setState(() {
+                                                        _isDraggingAngle = true;
+                                                        _dragOffset = sceneOffset;
+                                                        _hasMeasurementNearPointer = true;
+                                                      });
+                                                      return;
+                                                    }
+                                                    
+                                                    final angleIndex = _getAngleAtPoint(sceneOffset, 60.0);
+                                                    if (angleIndex != null) {
+                                                      setState(() {
+                                                        _selectedAngleIndex = angleIndex;
+                                                        _selectedRulerIndex = null;
+                                                        _selectedTextIndex = null;
+                                                        _selectedArrowIndex = null;
+                                                        _isDraggingAngle = true;
+                                                        _dragOffset = sceneOffset;
+                                                        _hasMeasurementNearPointer = true;
+                                                      });
+                                                      return;
+                                                    }
+                                                    
+                                                    // Проверяем выбранную линейку по расстоянию до линии
+                                                    if (_selectedRulerIndex != null) {
+                                                      final canvasSize = _getCanvasSize();
+                                                      final line = _completedRulerLines[_selectedRulerIndex!];
+                                                      final absStart = line.getAbsoluteStart(canvasSize);
+                                                      final absEnd = line.getAbsoluteEnd(canvasSize);
+                                                      final distToLine = _pointToLineDistance(sceneOffset, absStart, absEnd);
+                                                      if (distToLine <= 60.0) {
+                                                        setState(() {
+                                                          _isDraggingRuler = true;
+                                                          _dragOffset = sceneOffset;
+                                                          _hasMeasurementNearPointer = true;
+                                                        });
+                                                        return;
+                                                      }
+                                                    }
+                                                    
+                                                    // Проверяем выбранный угол по расстоянию
+                                                    if (_selectedAngleIndex != null) {
+                                                      final canvasSize = _getCanvasSize();
+                                                      final angle = _completedAngles[_selectedAngleIndex!];
+                                                      final absVertex = angle.getAbsoluteVertex(canvasSize);
+                                                      final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+                                                      final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+                                                      final distToVertex = (sceneOffset - absVertex).distance;
+                                                      final distToPoint1 = (sceneOffset - absPoint1).distance;
+                                                      final distToPoint2 = (sceneOffset - absPoint2).distance;
+                                                      final distToRay1 = _pointToLineDistance(sceneOffset, absVertex, absPoint1);
+                                                      final distToRay2 = _pointToLineDistance(sceneOffset, absVertex, absPoint2);
+                                                      
+                                                      if (distToVertex <= 60.0 || distToPoint1 <= 60.0 || distToPoint2 <= 60.0 || 
+                                                          distToRay1 <= 60.0 || distToRay2 <= 60.0) {
+                                                        setState(() {
+                                                          _isDraggingAngle = true;
+                                                          _dragOffset = sceneOffset;
+                                                          _hasMeasurementNearPointer = true;
+                                                        });
+                                                        return;
+                                                      }
+                                                    }
+                                                    
+                                                    // Проверяем и начинаем перетаскивание текстовых аннотаций
+                                                    if (_selectedTextIndex != null && _isPointOnTextDragHandle(sceneOffset, _selectedTextIndex!)) {
+                                                      setState(() {
+                                                        _isDraggingText = true;
+                                                        _dragOffset = sceneOffset;
+                                                        _hasMeasurementNearPointer = true;
+                                                      });
+                                                      return;
+                                                    }
+                                                    
+                                                    final textIndex = _getTextAnnotationAtPoint(sceneOffset, 50.0);
+                                                    if (textIndex != null) {
+                                                      setState(() {
+                                                        _selectedTextIndex = textIndex;
+                                                        _selectedRulerIndex = null;
+                                                        _selectedAngleIndex = null;
+                                                        _selectedArrowIndex = null;
+                                                        _isDraggingText = true;
+                                                        _dragOffset = sceneOffset;
+                                                        _hasMeasurementNearPointer = true;
+                                                      });
+                                                      return;
+                                                    }
+                                                    
+                                                    // Проверяем и начинаем перетаскивание стрелок
+                                                    if (_selectedArrowIndex != null && _isPointOnArrowDragHandle(sceneOffset, _selectedArrowIndex!)) {
+                                                      setState(() {
+                                                        _isDraggingArrow = true;
+                                                        _dragOffset = sceneOffset;
+                                                        _hasMeasurementNearPointer = true;
+                                                      });
+                                                      return;
+                                                    }
+                                                    
+                                                    final arrowIndex = _getArrowAnnotationAtPoint(sceneOffset, 30.0);
+                                                    if (arrowIndex != null) {
+                                                      setState(() {
+                                                        _selectedArrowIndex = arrowIndex;
+                                                        _selectedRulerIndex = null;
+                                                        _selectedAngleIndex = null;
+                                                        _selectedTextIndex = null;
+                                                        _isDraggingArrow = true;
+                                                        _dragOffset = sceneOffset;
+                                                        _hasMeasurementNearPointer = true;
+                                                      });
+                                                      return;
+                                                    }
+                                                  }
+                                                }
+                                              },
+                                              onPointerUp: (PointerUpEvent event) {
+                                                if (_currentTool == ToolMode.magnifier) {
+                                                  _handlePointerUp(event);
+                                                } else if (_isDraggingRuler || _isDraggingAngle || _isDraggingText || _isDraggingArrow) {
+                                                  // Завершаем перетаскивание
+                                                  setState(() {
+                                                    _isDraggingRuler = false;
+                                                    _isDraggingAngle = false;
+                                                    _isDraggingText = false;
+                                                    _isDraggingArrow = false;
+                                                    _dragOffset = null;
+                                                    _hasMeasurementNearPointer = false;
+                                                  });
+                                                }
+                                              },
+                                              onPointerMove: (PointerMoveEvent event) {
+                                                if (_currentTool == ToolMode.magnifier) {
+                                                  _handlePointerMove(event);
+                                                } else {
+                                                  // Обновляем флаг при движении указателя
+                                                  final hasMeasurement = _checkMeasurementNearPointer(event.localPosition);
+                                                  if (hasMeasurement != _hasMeasurementNearPointer && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingText && !_isDraggingArrow) {
+                                                    setState(() {
+                                                      _hasMeasurementNearPointer = hasMeasurement;
+                                                    });
+                                                  }
+                                                  
+                                                  // Обрабатываем перетаскивание напрямую через Listener
+                                                  if (_isDraggingRuler && _selectedRulerIndex != null && _dragOffset != null) {
+                                                    if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                      _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                      _matrixCacheValid = true;
+                                                    }
+                                                    final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                    final canvasSize = _getCanvasSize();
+                                                    final deltaScene = sceneOffset - _dragOffset!;
+                                                    final deltaRelative = Offset(
+                                                      deltaScene.dx / canvasSize.width,
+                                                      deltaScene.dy / canvasSize.height,
+                                                    );
+                                                    setState(() {
+                                                      final line = _completedRulerLines[_selectedRulerIndex!];
+                                                      _completedRulerLines[_selectedRulerIndex!] = RulerLine(
+                                                        start: Offset(line.start.dx + deltaRelative.dx, line.start.dy + deltaRelative.dy),
+                                                        end: Offset(line.end.dx + deltaRelative.dx, line.end.dy + deltaRelative.dy),
+                                                        pixelSpacing: line.pixelSpacing,
+                                                      );
+                                                      _dragOffset = sceneOffset;
+                                                    });
+                                                    return;
+                                                  }
+                                                  
+                                                  if (_isDraggingAngle && _selectedAngleIndex != null && _dragOffset != null) {
+                                                    if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                      _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                      _matrixCacheValid = true;
+                                                    }
+                                                    final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                    final canvasSize = _getCanvasSize();
+                                                    final deltaScene = sceneOffset - _dragOffset!;
+                                                    final deltaRelative = Offset(
+                                                      deltaScene.dx / canvasSize.width,
+                                                      deltaScene.dy / canvasSize.height,
+                                                    );
+                                                    setState(() {
+                                                      final angle = _completedAngles[_selectedAngleIndex!];
+                                                      _completedAngles[_selectedAngleIndex!] = AngleMeasurement(
+                                                        vertex: Offset(angle.vertex.dx + deltaRelative.dx, angle.vertex.dy + deltaRelative.dy),
+                                                        point1: Offset(angle.point1.dx + deltaRelative.dx, angle.point1.dy + deltaRelative.dy),
+                                                        point2: Offset(angle.point2.dx + deltaRelative.dx, angle.point2.dy + deltaRelative.dy),
+                                                      );
+                                                      _dragOffset = sceneOffset;
+                                                    });
+                                                    return;
+                                                  }
+                                                  
+                                                  // Обрабатываем перетаскивание текстовых аннотаций
+                                                  if (_isDraggingText && _selectedTextIndex != null && _dragOffset != null) {
+                                                    if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                      _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                      _matrixCacheValid = true;
+                                                    }
+                                                    final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                    final deltaScene = sceneOffset - _dragOffset!;
+                                                    setState(() {
+                                                      final annotation = _textAnnotations[_selectedTextIndex!];
+                                                      _textAnnotations[_selectedTextIndex!] = TextAnnotation(
+                                                        position: Offset(annotation.position.dx + deltaScene.dx, annotation.position.dy + deltaScene.dy),
+                                                        text: annotation.text,
+                                                        color: annotation.color,
+                                                        fontSize: annotation.fontSize,
+                                                      );
+                                                      _dragOffset = sceneOffset;
+                                                    });
+                                                    return;
+                                                  }
+                                                  
+                                                  // Обрабатываем перетаскивание стрелок
+                                                  if (_isDraggingArrow && _selectedArrowIndex != null && _dragOffset != null) {
+                                                    if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                      _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                      _matrixCacheValid = true;
+                                                    }
+                                                    final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                    final deltaScene = sceneOffset - _dragOffset!;
+                                                    setState(() {
+                                                      final arrow = _arrowAnnotations[_selectedArrowIndex!];
+                                                      _arrowAnnotations[_selectedArrowIndex!] = ArrowAnnotation(
+                                                        start: Offset(arrow.start.dx + deltaScene.dx, arrow.start.dy + deltaScene.dy),
+                                                        end: Offset(arrow.end.dx + deltaScene.dx, arrow.end.dy + deltaScene.dy),
+                                                        color: arrow.color,
+                                                        strokeWidth: arrow.strokeWidth,
+                                                      );
+                                                      _dragOffset = sceneOffset;
+                                                    });
+                                                    return;
+                                                  }
+                                                }
+                                              },
                                               onPointerSignal: (PointerSignalEvent event) {
                                                 // Обрабатываем колёсико мыши только когда активен инструмент яркости
                                                 if (event is PointerScrollEvent && _currentTool == ToolMode.brightness) {
@@ -2856,12 +3636,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               onPanStart: _handlePanStart,
                                               onPanUpdate: _handlePanUpdate,
                                               onPanEnd: _handlePanEnd,
-                                              child: IgnorePointer(
-                                                ignoring: _isDraggingRuler || _isDraggingAngle,
+                                              child: AbsorbPointer(
+                                                absorbing: _isDraggingRuler || _isDraggingAngle || _isDraggingText || _isDraggingArrow,
                                                 child: InteractiveViewer(
                                                   transformationController: _transformationController,
-                                                  panEnabled: _currentTool == ToolMode.pan && !_isDraggingRuler && !_isDraggingAngle,
-                                                  scaleEnabled: _currentTool == ToolMode.pan && !_isDraggingRuler && !_isDraggingAngle,
+                                                  panEnabled: _currentTool == ToolMode.pan && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingText && !_isDraggingArrow && !_hasMeasurementNearPointer,
+                                                  scaleEnabled: _currentTool == ToolMode.pan && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingText && !_isDraggingArrow && !_hasMeasurementNearPointer,
                                                 minScale: 0.1, maxScale: 8.0,
                                                 child: RepaintBoundary(
                                                   key: _captureKey,
@@ -2944,7 +3724,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                     child: Container(), // Пустой контейнер для предотвращения ошибок
                                                   ),
                                                   CustomPaint(
-                                                    painter: AnnotationPainter(textAnnotations: _textAnnotations, arrowAnnotations: _arrowAnnotations, arrowPoints: _arrowPoints),
+                                                    painter: AnnotationPainter(
+                                                      textAnnotations: _textAnnotations,
+                                                      arrowAnnotations: _arrowAnnotations,
+                                                      arrowPoints: _arrowPoints,
+                                                      selectedTextIndex: _selectedTextIndex,
+                                                      selectedArrowIndex: _selectedArrowIndex,
+                                                    ),
                                                     child: Container(), // Пустой контейнер для предотвращения ошибок
                                                   ),
                                                   CustomPaint(
