@@ -535,8 +535,18 @@ class RulerPainter extends CustomPainter {
   }
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    // Для надежности всегда перерисовываем, так как списки могут мутировать по месту
-    return true;
+    if (oldDelegate is! RulerPainter) return true;
+    
+    // Перерисовываем только если изменились данные
+    return oldDelegate.currentPoints.length != currentPoints.length ||
+           oldDelegate.completedLines.length != completedLines.length ||
+           oldDelegate.pixelSpacing != pixelSpacing ||
+           oldDelegate.selectedIndex != selectedIndex ||
+           oldDelegate.imageSize != imageSize ||
+           // Проверяем изменения в текущих точках
+           (currentPoints.isNotEmpty && oldDelegate.currentPoints.isNotEmpty &&
+            (currentPoints.last.dx != oldDelegate.currentPoints.last.dx ||
+             currentPoints.last.dy != oldDelegate.currentPoints.last.dy));
   }
 }
 
@@ -743,7 +753,17 @@ class AnglePainter extends CustomPainter {
   
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return true;
+    if (oldDelegate is! AnglePainter) return true;
+    
+    // Перерисовываем только если изменились данные
+    return oldDelegate.currentPoints.length != currentPoints.length ||
+           oldDelegate.completedAngles.length != completedAngles.length ||
+           oldDelegate.selectedIndex != selectedIndex ||
+           oldDelegate.imageSize != imageSize ||
+           // Проверяем изменения в текущих точках
+           (currentPoints.isNotEmpty && oldDelegate.currentPoints.isNotEmpty &&
+            (currentPoints.last.dx != oldDelegate.currentPoints.last.dx ||
+             currentPoints.last.dy != oldDelegate.currentPoints.last.dy));
   }
 }
 
@@ -1836,7 +1856,97 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
     
-    // Проверяем клик на существующие линии/углы (в любом режиме, кроме создания новых)
+    // Обрабатываем клик для инструмента угла (приоритет - быстрая обработка)
+    if (_currentTool == ToolMode.angle) {
+      setState(() {
+        if (_anglePoints.length == 0) {
+          // Первый клик - устанавливаем первую точку на первом луче
+          _anglePoints.add(sceneOffset);
+        } else if (_anglePoints.length == 1) {
+          // Второй клик - устанавливаем вершину угла
+          _anglePoints.add(sceneOffset);
+        } else if (_anglePoints.length == 2) {
+          // Третий клик - устанавливаем третью точку на втором луче и завершаем измерение
+          // Угол измеряется между точками 1 и 3, с вершиной в точке 2
+          _anglePoints.add(sceneOffset);
+          final canvasSize = _getCanvasSize();
+          final completedAngle = AngleMeasurement(
+            vertex: _sceneToRelativeCoordinates(_anglePoints[1], canvasSize),  // Вершина угла - вторая точка
+            point1: _sceneToRelativeCoordinates(_anglePoints[0], canvasSize),   // Первая точка на первом луче
+            point2: _sceneToRelativeCoordinates(_anglePoints[2], canvasSize),  // Третья точка на втором луче
+          );
+          _completedAngles = List.of(_completedAngles)..add(completedAngle);
+          _addToHistory(ActionType.angleAdded, null);
+          // Очищаем точки для следующего измерения
+          _anglePoints = [];
+        } else {
+          // Если по какой-то причине больше 3 точек, начинаем заново
+          _anglePoints = [sceneOffset];
+        }
+      });
+      return;
+    }
+    
+    // Обрабатываем клик только если активен инструмент линейки (приоритет - быстрая обработка)
+    if (_currentTool == ToolMode.ruler) {
+
+    // Определяем, зажат ли Ctrl в момент клика
+    final bool ctrlPressed = RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlLeft) ||
+                             RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlRight);
+
+    setState(() {
+      if (ctrlPressed) {
+        // Режим добавления сегментов при зажатом Ctrl
+        if (_rulerPoints.length == 1) {
+          // Завершаем текущую линию из точки-анкера в новую точку
+          final canvasSize = _getCanvasSize();
+          final completedLine = RulerLine(
+            start: _sceneToRelativeCoordinates(_rulerPoints[0], canvasSize),
+            end: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
+            pixelSpacing: _pixelSpacingRow,
+          );
+          _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
+          _addToHistory(ActionType.rulerAdded, null);
+          // Очищаем анкер после завершения сегмента
+          _rulerPoints = [];
+        } else if (_rulerPoints.isEmpty) {
+          // Нет ни точек, ни линий — ставим первую точку-анкер
+          _rulerPoints.add(sceneOffset);
+        } else if (_rulerPoints.length >= 2) {
+          // Если по какой-то причине осталось 2 точки, сбрасываем к одному анкеру
+          _rulerPoints = [sceneOffset];
+        }
+      } else {
+        // Режим без Ctrl: если была линия — удалить её и начать новую точку
+        if (_completedRulerLines.isNotEmpty) {
+          _completedRulerLines = [];
+        }
+
+        // Обычная логика построения: две клики создают линию
+        if (_rulerPoints.length == 0) {
+          _rulerPoints.add(sceneOffset);
+        } else if (_rulerPoints.length == 1) {
+          // Завершаем линию
+          final canvasSize = _getCanvasSize();
+          final completedLine = RulerLine(
+            start: _sceneToRelativeCoordinates(_rulerPoints[0], canvasSize),
+            end: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
+            pixelSpacing: _pixelSpacingRow,
+          );
+          _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
+          _addToHistory(ActionType.rulerAdded, null);
+          // Очищаем точки для следующего измерения
+          _rulerPoints = [];
+        } else {
+          // Если было больше 1 точки (неожиданно), начинаем заново
+          _rulerPoints = [sceneOffset];
+        }
+      }
+    });
+      return; // Выходим сразу после обработки линейки
+    }
+    
+    // Проверяем клик на существующие линии/углы (только если не в режиме линейки/угла)
     if (_rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
       // Проверяем клик на линейки (увеличенный хитбокс)
       final rulerIndex = _getRulerLineAtPoint(sceneOffset, 30.0);
@@ -1875,11 +1985,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _selectedRulerIndex = null;
         _selectedAngleIndex = null;
       });
-    }
-    
-    // Проверяем клик на текстовые аннотации и стрелки (в любом режиме, кроме создания новых)
-    if (_rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
-      // Проверяем клик на текстовые аннотации (увеличенный хитбокс)
+      
+      // Проверяем клик на текстовые аннотации и стрелки
       final textIndex = _getTextAnnotationAtPoint(sceneOffset, 50.0);
       if (textIndex != null) {
         setState(() {
@@ -1917,102 +2024,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _selectedArrowIndex = null;
       });
     }
-    
-    // Обрабатываем клик для инструмента угла
-    if (_currentTool == ToolMode.angle) {
-      setState(() {
-        if (_anglePoints.length == 0) {
-          // Первый клик - устанавливаем первую точку на первом луче
-          _anglePoints.add(sceneOffset);
-          print("Угол: установлена первая точка на первом луче");
-        } else if (_anglePoints.length == 1) {
-          // Второй клик - устанавливаем вершину угла
-          _anglePoints.add(sceneOffset);
-          print("Угол: установлена вершина угла");
-        } else if (_anglePoints.length == 2) {
-          // Третий клик - устанавливаем третью точку на втором луче и завершаем измерение
-          // Угол измеряется между точками 1 и 3, с вершиной в точке 2
-          _anglePoints.add(sceneOffset);
-          final canvasSize = _getCanvasSize();
-          final completedAngle = AngleMeasurement(
-            vertex: _sceneToRelativeCoordinates(_anglePoints[1], canvasSize),  // Вершина угла - вторая точка
-            point1: _sceneToRelativeCoordinates(_anglePoints[0], canvasSize),   // Первая точка на первом луче
-            point2: _sceneToRelativeCoordinates(_anglePoints[2], canvasSize),  // Третья точка на втором луче
-          );
-          _completedAngles = List.of(_completedAngles)..add(completedAngle);
-          _addToHistory(ActionType.angleAdded, null);
-          print("Угол: завершено измерение, угол = ${completedAngle.getAngleDegrees(canvasSize).toStringAsFixed(1)}°");
-          // Очищаем точки для следующего измерения
-          _anglePoints = [];
-        } else {
-          // Если по какой-то причине больше 3 точек, начинаем заново
-          _anglePoints = [sceneOffset];
-        }
-      });
-      return;
-    }
-    
-    // Обрабатываем клик только если активен инструмент линейки
-    if (_currentTool != ToolMode.ruler) return;
-
-    // Определяем, зажат ли Ctrl в момент клика
-    final bool ctrlPressed = RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlLeft) ||
-                             RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlRight);
-
-    setState(() {
-      if (ctrlPressed) {
-        // Режим добавления сегментов при зажатом Ctrl
-        if (_rulerPoints.length == 1) {
-          // Завершаем текущую линию из точки-анкера в новую точку
-          final canvasSize = _getCanvasSize();
-          final completedLine = RulerLine(
-            start: _sceneToRelativeCoordinates(_rulerPoints[0], canvasSize),
-            end: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
-            pixelSpacing: _pixelSpacingRow,
-          );
-          _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
-          _addToHistory(ActionType.rulerAdded, null);
-          print("Линейка: добавлен сегмент Ctrl из анкера -> новая точка");
-          // Очищаем анкер после завершения сегмента
-          _rulerPoints = [];
-        } else if (_rulerPoints.isEmpty) {
-          // Нет ни точек, ни линий — ставим первую точку-анкер
-          _rulerPoints.add(sceneOffset);
-          print("Линейка: установлен анкер (Ctrl) в пустом состоянии");
-        } else if (_rulerPoints.length >= 2) {
-          // Если по какой-то причине осталось 2 точки, сбрасываем к одному анкеру
-          _rulerPoints = [sceneOffset];
-        }
-      } else {
-        // Режим без Ctrl: если была линия — удалить её и начать новую точку
-        if (_completedRulerLines.isNotEmpty) {
-          _completedRulerLines = [];
-          print("Линейка: без Ctrl — удалены все старые линии");
-        }
-
-        // Обычная логика построения: две клики создают линию
-        if (_rulerPoints.length == 0) {
-          _rulerPoints.add(sceneOffset);
-          print("Линейка: добавлена первая точка");
-        } else if (_rulerPoints.length == 1) {
-          // Завершаем линию
-          final canvasSize = _getCanvasSize();
-          final completedLine = RulerLine(
-            start: _sceneToRelativeCoordinates(_rulerPoints[0], canvasSize),
-            end: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
-            pixelSpacing: _pixelSpacingRow,
-          );
-          _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
-          _addToHistory(ActionType.rulerAdded, null);
-          print("Линейка: завершено измерение без Ctrl");
-          // Очищаем точки для следующего измерения
-          _rulerPoints = [];
-        } else {
-          // Если было больше 1 точки (неожиданно), начинаем заново
-          _rulerPoints = [sceneOffset];
-        }
-      }
-    });
   }
 
   void _handleTapUp(TapUpDetails details) {
@@ -2630,6 +2641,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _dicomReport = _reportController.text.trim();
       // Сохраняем все теги из контроллеров, а не только те, что есть в _dicomTags
       _dicomTags = Map.fromEntries(_tagControllers.entries.map((e) => MapEntry(e.key, e.value.text.trim())));
+      
+      // Обновляем _patientName если изменился тег PatientName
+      if (_dicomTags.containsKey('PatientName')) {
+        final newPatientName = _dicomTags['PatientName']!.trim();
+        if (newPatientName.isNotEmpty && newPatientName != _patientName) {
+          setState(() {
+            _patientName = newPatientName;
+          });
+        }
+      }
       
       // Убеждаемся, что PixelSpacing всегда сохранен в тегах
       if (!_dicomTags.containsKey('PixelSpacing') && _pixelSpacingRow > 0) {
@@ -4020,28 +4041,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                         ),
                                                       ),
                                                   )),
-                                                  CustomPaint(
-                                                    painter: RulerPainter(
-                                                      currentPoints: List.of(_rulerPoints), 
-                                                      completedLines: List.of(_completedRulerLines),
-                                                      pixelSpacing: _pixelSpacingRow,
-                                                      selectedIndex: _selectedRulerIndex,
-                                                      imageSize: _decodedImage != null 
-                                                        ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
-                                                        : null,
+                                                  RepaintBoundary(
+                                                    child: CustomPaint(
+                                                      painter: RulerPainter(
+                                                        currentPoints: List.of(_rulerPoints), 
+                                                        completedLines: List.of(_completedRulerLines),
+                                                        pixelSpacing: _pixelSpacingRow,
+                                                        selectedIndex: _selectedRulerIndex,
+                                                        imageSize: _decodedImage != null 
+                                                          ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
+                                                          : null,
+                                                      ),
+                                                      child: Container(), // Пустой контейнер для предотвращения ошибок
                                                     ),
-                                                    child: Container(), // Пустой контейнер для предотвращения ошибок
                                                   ),
-                                                  CustomPaint(
-                                                    painter: AnglePainter(
-                                                      currentPoints: List.of(_anglePoints),
-                                                      completedAngles: List.of(_completedAngles),
-                                                      selectedIndex: _selectedAngleIndex,
-                                                      imageSize: _decodedImage != null 
-                                                        ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
-                                                        : null,
+                                                  RepaintBoundary(
+                                                    child: CustomPaint(
+                                                      painter: AnglePainter(
+                                                        currentPoints: List.of(_anglePoints),
+                                                        completedAngles: List.of(_completedAngles),
+                                                        selectedIndex: _selectedAngleIndex,
+                                                        imageSize: _decodedImage != null 
+                                                          ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
+                                                          : null,
+                                                      ),
+                                                      child: Container(), // Пустой контейнер для предотвращения ошибок
                                                     ),
-                                                    child: Container(), // Пустой контейнер для предотвращения ошибок
                                                   ),
                                                   CustomPaint(
                                                     painter: AnnotationPainter(
@@ -4098,10 +4123,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ),
                           // Панель с тегами и заключением (можно скрыть)
                           if (_showInfoPanel)
-                            Container(
-                              width: 320,
-                              color: const Color(0xFF111111),
-                              child: Column(
+                            RepaintBoundary(
+                              child: Container(
+                                width: 320,
+                                color: const Color(0xFF111111),
+                                child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Container(
@@ -4277,6 +4303,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   ),
                                 ],
                               ),
+                            ),
                             ),
                         ],
                       )
