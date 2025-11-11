@@ -12,6 +12,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'settings_screen.dart';
 import '../services/hotkey_service.dart';
 import '../services/embedded_server_service.dart';
@@ -1140,7 +1141,9 @@ Uint8List _decodeImageInIsolate(dynamic data) {
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final bool calibrationMode;
+  
+  const HomeScreen({super.key, this.calibrationMode = false});
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -1160,6 +1163,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? _currentFileName;
   final TextEditingController _reportController = TextEditingController();
   final Map<String, TextEditingController> _tagControllers = {};
+  
+  // Режим калибровки
+  bool _isCalibrationMode = false;
+  List<Offset> _calibrationPoints = []; // Точки для калибровки
 
   // Линейка: текущие точки (0-1 точка) для активного измерения
   List<Offset> _rulerPoints = [];
@@ -1407,6 +1414,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _initializeHotkeys();
     _initializeEmbeddedServer();
     
+    // Режим калибровки теперь активируется только через настройки
+    
     // Откладываем инициализацию кэша матрицы до первого использования
     _matrixCacheValid = false;
     
@@ -1417,6 +1426,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     
     // Слушаем изменения размера окна
     WidgetsBinding.instance.addObserver(this);
+  }
+  
+  Future<void> _loadPixelSpacing() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final pixelSpacing = prefs.getDouble('pixel_spacing_row');
+      if (pixelSpacing != null) {
+        setState(() {
+          _pixelSpacingRow = pixelSpacing;
+        });
+      }
+    } catch (e) {
+      print('Ошибка при загрузке pixelSpacing: $e');
+    }
   }
   
   @override
@@ -1574,9 +1597,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             if (!data.containsKey('patient_name')) {
               throw Exception('Отсутствует поле patient_name в ответе сервера');
             }
-            if (!data.containsKey('pixel_spacing_row')) {
-              throw Exception('Отсутствует поле pixel_spacing_row в ответе сервера');
-            }
+            // pixel_spacing_row может отсутствовать, если используется сохраненное значение
             
             print("Все необходимые поля присутствуют в ответе");
             
@@ -1592,6 +1613,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 decodedImage = frame.image;
               } catch (e) {
                 print("Ошибка при декодировании изображения для лупы: $e");
+              }
+              
+              // Загружаем pixelSpacing из данных или из SharedPreferences (до setState)
+              double pixelSpacingToUse;
+              final pixelSpacingFromData = (data['pixel_spacing_row'] as num?)?.toDouble();
+              if (pixelSpacingFromData != null) {
+                pixelSpacingToUse = pixelSpacingFromData;
+              } else {
+                // Если в данных нет, загружаем из SharedPreferences
+                final prefs = await SharedPreferences.getInstance();
+                final savedPixelSpacing = prefs.getDouble('pixel_spacing_row');
+                pixelSpacingToUse = savedPixelSpacing ?? _pixelSpacingRow;
               }
               
               setState(() {
@@ -1616,7 +1649,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _dicomTags.forEach((k, v) {
                   _tagControllers[k] = TextEditingController(text: v);
                 });
-                _pixelSpacingRow = (data['pixel_spacing_row'] as num).toDouble();
+                // Устанавливаем pixelSpacing
+                _pixelSpacingRow = pixelSpacingToUse;
                 _windowCenter = (data['window_center'] as num).toDouble();
                 _windowWidth = (data['window_width'] as num).toDouble();
                 _initialWC = _windowCenter;
@@ -1996,6 +2030,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Обрабатываем клик только если активен инструмент линейки
     if (_currentTool != ToolMode.ruler) return;
 
+    // Режим калибровки
+    if (_isCalibrationMode) {
+      setState(() {
+        if (_calibrationPoints.length == 0) {
+          _calibrationPoints.add(sceneOffset);
+          print("Калибровка: добавлена первая точка");
+        } else if (_calibrationPoints.length == 1) {
+          _calibrationPoints.add(sceneOffset);
+          print("Калибровка: добавлена вторая точка");
+          // Показываем диалог для ввода значения в мм
+          _showCalibrationInputDialog();
+        } else {
+          // Если уже есть две точки, начинаем заново
+          _calibrationPoints = [sceneOffset];
+        }
+      });
+      return;
+    }
+
     // Определяем, зажат ли Ctrl в момент клика
     final bool ctrlPressed = RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlLeft) ||
                              RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlRight);
@@ -2057,10 +2110,144 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _handleDoubleTap() {
-    // Обрабатываем двойной клик для калибровки линейки
-    if (_selectedRulerIndex != null && _selectedRulerIndex! >= 0 && _selectedRulerIndex! < _completedRulerLines.length) {
-      _showCalibrateRulerDialog(_selectedRulerIndex!);
+    // Двойной клик больше не используется для калибровки
+  }
+  
+  void _showCalibrationInputDialog() {
+    if (_calibrationPoints.length != 2) return;
+    
+    // Вычисляем расстояние в пикселях изображения
+    final imageSize = _decodedImage != null 
+        ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
+        : _getCanvasSize();
+    
+    // Преобразуем точки в относительные координаты и вычисляем расстояние
+    final canvasSize = _getCanvasSize();
+    final relPoint1 = _sceneToRelativeCoordinates(_calibrationPoints[0], canvasSize);
+    final relPoint2 = _sceneToRelativeCoordinates(_calibrationPoints[1], canvasSize);
+    final absPoint1 = Offset(relPoint1.dx * imageSize.width, relPoint1.dy * imageSize.height);
+    final absPoint2 = Offset(relPoint2.dx * imageSize.width, relPoint2.dy * imageSize.height);
+    final pixelDistance = (absPoint2 - absPoint1).distance;
+    
+    final realSizeController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Калибровка линейки'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Измеренное расстояние: ${pixelDistance.toStringAsFixed(1)} пикселей'),
+              const SizedBox(height: 16),
+              const Text('Введите реальный размер между точками (в мм):'),
+              const SizedBox(height: 8),
+              TextField(
+                controller: realSizeController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  hintText: 'Например: 60 (для 6 см)',
+                  border: OutlineInputBorder(),
+                ),
+                autofocus: true,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                setState(() {
+                  _calibrationPoints = [];
+                });
+              },
+              child: const Text('Отмена'),
+            ),
+            TextButton(
+              onPressed: () {
+                final realSizeText = realSizeController.text.trim();
+                if (realSizeText.isNotEmpty) {
+                  final realSizeMm = double.tryParse(realSizeText);
+                  if (realSizeMm != null && realSizeMm > 0 && pixelDistance > 0) {
+                    // Вычисляем новый PixelSpacing
+                    final newPixelSpacing = realSizeMm / pixelDistance;
+                    
+                    // Сохраняем в SharedPreferences
+                    _savePixelSpacing(newPixelSpacing);
+                    
+                    Navigator.of(ctx).pop();
+                    
+                    // Выходим из режима калибровки
+                    setState(() {
+                      _isCalibrationMode = false;
+                      _calibrationPoints = [];
+                    });
+                    
+                    // Показываем уведомление
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Калибровка выполнена: ${newPixelSpacing.toStringAsFixed(3)} мм/пиксель'),
+                        duration: const Duration(seconds: 2),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Введите корректное положительное число'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
+              },
+              child: const Text('Принять'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+  
+  Future<void> _savePixelSpacing(double pixelSpacing) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('pixel_spacing_row', pixelSpacing);
+      await _updatePixelSpacingFromSettings(pixelSpacing);
+    } catch (e) {
+      print('Ошибка при сохранении pixelSpacing: $e');
     }
+  }
+  
+  Future<void> _updatePixelSpacingFromSettings(double pixelSpacing) async {
+    setState(() {
+      _pixelSpacingRow = pixelSpacing;
+      
+      // Обновляем PixelSpacing для всех линеек
+      _completedRulerLines = _completedRulerLines.map((l) {
+        return RulerLine(
+          start: l.start,
+          end: l.end,
+          pixelSpacing: pixelSpacing,
+        );
+      }).toList();
+      
+      // Обновляем тег PixelSpacing если он есть
+      if (_dicomTags.containsKey('PixelSpacing')) {
+        _dicomTags['PixelSpacing'] = "${pixelSpacing.toStringAsFixed(3)} мм/пиксель (откалибровано вручную)";
+        if (_tagControllers.containsKey('PixelSpacing')) {
+          _tagControllers['PixelSpacing']?.dispose();
+          _tagControllers['PixelSpacing'] = TextEditingController(text: _dicomTags['PixelSpacing']!);
+        }
+      } else {
+        // Если тега нет, создаем его
+        _dicomTags['PixelSpacing'] = "${pixelSpacing.toStringAsFixed(3)} мм/пиксель (откалибровано вручную)";
+        _tagControllers['PixelSpacing'] = TextEditingController(text: _dicomTags['PixelSpacing']!);
+      }
+    });
   }
 
   void _handleTapUp(TapUpDetails details) {
@@ -3443,13 +3630,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               IconButton(
                 icon: const Icon(Icons.settings),
                 onPressed: () async {
-                  await Navigator.push(
+                  final result = await Navigator.push(
                     context,
                     MaterialPageRoute(builder: (context) => const SettingsScreen()),
                   );
                   // Перезагружаем настройки после возврата из экрана настроек
                   await HotkeyService.reloadSettings();
                   print('Настройки перезагружены: ${HotkeyService.hotkeySettings.toJson()}');
+                  
+                  // Если вернулись с запросом на калибровку, активируем режим калибровки
+                  if (result == true) {
+                    setState(() {
+                      _isCalibrationMode = true;
+                      _currentTool = ToolMode.ruler;
+                      _calibrationPoints = [];
+                    });
+                    
+                    // Показываем подсказку
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Режим калибровки: выберите две точки на изображении'),
+                          duration: Duration(seconds: 3),
+                          backgroundColor: Colors.blue,
+                        ),
+                      );
+                    }
+                  } else if (result != null && result is double) {
+                    // Если вернулись с новым значением pixelSpacing (из галочки), обновляем теги
+                    await _updatePixelSpacingFromSettings(result);
+                  }
                 },
                 tooltip: 'Настройки',
               ),
@@ -4027,7 +4237,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                   )),
                                                   CustomPaint(
                                                     painter: RulerPainter(
-                                                      currentPoints: List.of(_rulerPoints), 
+                                                      currentPoints: _isCalibrationMode ? List.of(_calibrationPoints) : List.of(_rulerPoints), 
                                                       completedLines: List.of(_completedRulerLines),
                                                       pixelSpacing: _pixelSpacingRow,
                                                       selectedIndex: _selectedRulerIndex,

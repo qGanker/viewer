@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:async';
 import '../utils/keyboard_utils.dart';
+import 'home_screen.dart';
 
 // Класс для хранения комбинации клавиш
 class KeyCombination {
@@ -170,6 +171,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _listeningFor;
   Timer? _listeningTimeout;
   
+  // Переменные для калибровки
+  final TextEditingController _calibrationController = TextEditingController();
+  double _currentPixelSpacing = 1.0;
+  
   final Map<String, String> _toolNames = {
     'panKey': 'Панорамирование',
     'rulerKey': 'Линейка',
@@ -186,12 +191,75 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _loadSettings();
+    _loadCalibrationSettings();
   }
 
   @override
   void dispose() {
     _listeningTimeout?.cancel();
+    _calibrationController.dispose();
     super.dispose();
+  }
+  
+  Future<void> _loadCalibrationSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final pixelSpacing = prefs.getDouble('pixel_spacing_row') ?? 1.0;
+      setState(() {
+        _currentPixelSpacing = pixelSpacing;
+        _calibrationController.text = pixelSpacing.toStringAsFixed(3);
+      });
+    } catch (e) {
+      print('Ошибка при загрузке настроек калибровки: $e');
+    }
+  }
+  
+  Future<void> _saveCalibrationSettings(double pixelSpacing) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('pixel_spacing_row', pixelSpacing);
+      setState(() {
+        _currentPixelSpacing = pixelSpacing;
+        _calibrationController.text = pixelSpacing.toStringAsFixed(3);
+      });
+    } catch (e) {
+      print('Ошибка при сохранении настроек калибровки: $e');
+    }
+  }
+  
+  Future<void> _startCalibration() async {
+    // Возвращаемся на предыдущий экран (HomeScreen) и активируем режим калибровки
+    Navigator.of(context).pop(true); // true означает, что нужно активировать режим калибровки
+  }
+  
+  Future<void> _saveCalibrationFromInput() async {
+    final value = _calibrationController.text.trim();
+    if (value.isNotEmpty) {
+      final parsed = double.tryParse(value);
+      if (parsed != null && parsed > 0) {
+        await _saveCalibrationSettings(parsed);
+        // Возвращаем значение в HomeScreen для обновления тегов
+        Navigator.of(context).pop(parsed);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Значение сохранено: ${parsed.toStringAsFixed(3)} мм/пиксель'),
+              duration: const Duration(seconds: 2),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Введите корректное положительное число'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
   }
 
   Future<void> _loadSettings() async {
@@ -623,24 +691,119 @@ class _SettingsScreenState extends State<SettingsScreen> {
             
             // Список горячих клавиш
             Expanded(
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1A1A1A),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFF2C2C2C), width: 1),
-                ),
+              child: SingleChildScrollView(
                 child: Column(
                   children: [
-                    _buildHotkeyRow('panKey', _toolNames['panKey'] ?? 'Панорамирование', _panKey),
-                    _buildHotkeyRow('rulerKey', _toolNames['rulerKey'] ?? 'Линейка', _rulerKey),
-                    _buildHotkeyRow('angleKey', _toolNames['angleKey'] ?? 'Угол', _angleKey),
-                    _buildHotkeyRow('magnifierKey', _toolNames['magnifierKey'] ?? 'Лупа', _magnifierKey),
-                    _buildHotkeyRow('brightnessKey', _toolNames['brightnessKey'] ?? 'Яркость', _brightnessKey),
-                    _buildHotkeyRow('invertKey', _toolNames['invertKey'] ?? 'Инверсия', _invertKey),
-                    _buildHotkeyRow('rotateKey', _toolNames['rotateKey'] ?? 'Поворот', _rotateKey),
-                    _buildHotkeyRow('annotationKey', _toolNames['annotationKey'] ?? 'Аннотации', _annotationKey),
-                    _buildHotkeyRow('undoKey', _toolNames['undoKey'] ?? 'Отмена', _undoKey),
+                    // Раздел горячих клавиш
+                    Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A1A1A),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFF2C2C2C), width: 1),
+                      ),
+                      child: Column(
+                        children: [
+                          _buildHotkeyRow('panKey', _toolNames['panKey'] ?? 'Панорамирование', _panKey),
+                          _buildHotkeyRow('rulerKey', _toolNames['rulerKey'] ?? 'Линейка', _rulerKey),
+                          _buildHotkeyRow('angleKey', _toolNames['angleKey'] ?? 'Угол', _angleKey),
+                          _buildHotkeyRow('magnifierKey', _toolNames['magnifierKey'] ?? 'Лупа', _magnifierKey),
+                          _buildHotkeyRow('brightnessKey', _toolNames['brightnessKey'] ?? 'Яркость', _brightnessKey),
+                          _buildHotkeyRow('invertKey', _toolNames['invertKey'] ?? 'Инверсия', _invertKey),
+                          _buildHotkeyRow('rotateKey', _toolNames['rotateKey'] ?? 'Поворот', _rotateKey),
+                          _buildHotkeyRow('annotationKey', _toolNames['annotationKey'] ?? 'Аннотации', _annotationKey),
+                          _buildHotkeyRow('undoKey', _toolNames['undoKey'] ?? 'Отмена', _undoKey),
+                        ],
+                      ),
+                    ),
+                    // Раздел калибровки линейки
+                    Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A1A1A),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFF2C2C2C), width: 1),
+                      ),
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Калибровка линейки',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: _calibrationController,
+                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                  style: const TextStyle(color: Colors.white),
+                                  decoration: InputDecoration(
+                                    labelText: 'PixelSpacing (мм/пиксель)',
+                                    labelStyle: const TextStyle(color: Color(0xFFB0B0B0)),
+                                    hintText: 'Например: 0.1',
+                                    hintStyle: const TextStyle(color: Color(0xFF606060)),
+                                    filled: true,
+                                    fillColor: const Color(0xFF2C2C2C),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(4),
+                                      borderSide: const BorderSide(color: Color(0xFF404040)),
+                                    ),
+                                    enabledBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(4),
+                                      borderSide: const BorderSide(color: Color(0xFF404040)),
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(4),
+                                      borderSide: const BorderSide(color: Color(0xFF4A90E2)),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                onPressed: _saveCalibrationFromInput,
+                                icon: const Icon(Icons.check),
+                                color: Colors.green,
+                                tooltip: 'Сохранить значение',
+                                style: IconButton.styleFrom(
+                                  backgroundColor: const Color(0xFF2C2C2C),
+                                  padding: const EdgeInsets.all(12),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              ElevatedButton(
+                                onPressed: _startCalibration,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF4A90E2),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                ),
+                                child: const Text('Откалибровать'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Текущее значение: ${_currentPixelSpacing.toStringAsFixed(3)} мм/пиксель',
+                            style: const TextStyle(
+                              color: Color(0xFFB0B0B0),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ),
