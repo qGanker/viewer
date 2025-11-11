@@ -360,6 +360,7 @@ class RulerPainter extends CustomPainter {
   final double pixelSpacing;
   final int? selectedIndex; // Индекс выбранной линии
   final Size? imageSize; // Размер исходного изображения для нормализации
+  final double rotationAngle; // Угол поворота изображения в градусах
   
   RulerPainter({
     required this.currentPoints, 
@@ -367,12 +368,22 @@ class RulerPainter extends CustomPainter {
     required this.pixelSpacing,
     this.selectedIndex,
     this.imageSize,
+    this.rotationAngle = 0.0,
   });
   @override
   void paint(Canvas canvas, Size size) {
     try {
       // Проверяем корректность pixelSpacing
       final safePixelSpacing = pixelSpacing.isFinite && pixelSpacing > 0 ? pixelSpacing : 1.0;
+    
+      // Применяем поворот к canvas, если есть
+      if (rotationAngle != 0.0) {
+        canvas.save();
+        final center = Offset(size.width / 2, size.height / 2);
+        canvas.translate(center.dx, center.dy);
+        canvas.rotate(rotationAngle * 3.14159 / 180);
+        canvas.translate(-center.dx, -center.dy);
+      }
     
       // Рисуем все завершенные линии
       // Важно: используем размер canvas для отрисовки, так как scene coordinates зависят от размера canvas
@@ -408,6 +419,11 @@ class RulerPainter extends CustomPainter {
         if (currentPoints.length > 1) {
           _drawRulerLine(canvas, currentPoints[0], currentPoints[1], safePixelSpacing, paint, fillPaint, completedLines.length + 1, false, null, size);
         }
+      }
+      
+      // Восстанавливаем canvas после поворота
+      if (rotationAngle != 0.0) {
+        canvas.restore();
       }
     } catch (e) {
       print("Ошибка в RulerPainter: $e");
@@ -535,18 +551,8 @@ class RulerPainter extends CustomPainter {
   }
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    if (oldDelegate is! RulerPainter) return true;
-    
-    // Перерисовываем только если изменились данные
-    return oldDelegate.currentPoints.length != currentPoints.length ||
-           oldDelegate.completedLines.length != completedLines.length ||
-           oldDelegate.pixelSpacing != pixelSpacing ||
-           oldDelegate.selectedIndex != selectedIndex ||
-           oldDelegate.imageSize != imageSize ||
-           // Проверяем изменения в текущих точках
-           (currentPoints.isNotEmpty && oldDelegate.currentPoints.isNotEmpty &&
-            (currentPoints.last.dx != oldDelegate.currentPoints.last.dx ||
-             currentPoints.last.dy != oldDelegate.currentPoints.last.dy));
+    // Для надежности всегда перерисовываем, так как списки могут мутировать по месту
+    return true;
   }
 }
 
@@ -556,17 +562,28 @@ class AnglePainter extends CustomPainter {
   final List<AngleMeasurement> completedAngles; // Завершенные измерения углов (в относительных координатах)
   final int? selectedIndex; // Индекс выбранного угла
   final Size? imageSize; // Размер исходного изображения для нормализации
+  final double rotationAngle; // Угол поворота изображения в градусах
   
   AnglePainter({
     required this.currentPoints,
     required this.completedAngles,
     this.selectedIndex,
     this.imageSize,
+    this.rotationAngle = 0.0,
   });
   
   @override
   void paint(Canvas canvas, Size size) {
     try {
+      // Применяем поворот к canvas, если есть
+      if (rotationAngle != 0.0) {
+        canvas.save();
+        final center = Offset(size.width / 2, size.height / 2);
+        canvas.translate(center.dx, center.dy);
+        canvas.rotate(rotationAngle * 3.14159 / 180);
+        canvas.translate(-center.dx, -center.dy);
+      }
+      
       // Важно: используем размер canvas для отрисовки, так как scene coordinates зависят от размера canvas
       // Относительные координаты (0.0-1.0) преобразуются в абсолютные используя размер canvas
       // Рисуем все завершенные углы
@@ -623,6 +640,11 @@ class AnglePainter extends CustomPainter {
           
           _drawAngle(canvas, vertex, point1, point2, paint, fillPaint, completedAngles.length + 1, angleDeg, false);
         }
+      }
+      
+      // Восстанавливаем canvas после поворота
+      if (rotationAngle != 0.0) {
+        canvas.restore();
       }
     } catch (e) {
       print("Ошибка в AnglePainter: $e");
@@ -753,17 +775,7 @@ class AnglePainter extends CustomPainter {
   
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    if (oldDelegate is! AnglePainter) return true;
-    
-    // Перерисовываем только если изменились данные
-    return oldDelegate.currentPoints.length != currentPoints.length ||
-           oldDelegate.completedAngles.length != completedAngles.length ||
-           oldDelegate.selectedIndex != selectedIndex ||
-           oldDelegate.imageSize != imageSize ||
-           // Проверяем изменения в текущих точках
-           (currentPoints.isNotEmpty && oldDelegate.currentPoints.isNotEmpty &&
-            (currentPoints.last.dx != oldDelegate.currentPoints.last.dx ||
-             currentPoints.last.dy != oldDelegate.currentPoints.last.dy));
+    return true;
   }
 }
 
@@ -896,9 +908,6 @@ class MagnifierPainter extends CustomPainter {
         captureSizeInImagePixels.clamp(0.0, imageHeight - (imagePosition.dy - halfCapture).clamp(0.0, imageHeight)),
       );
       
-      // Реальный размер захваченной области в пикселях исходного изображения
-      final actualCaptureSize = sourceRect.width;
-      
       // Позиция лупы на экране (смещена от курсора вверх и влево)
       final magnifierOffset = Offset(
         (position!.dx - size / 2).clamp(0.0, canvasSize.width - size),
@@ -984,17 +993,40 @@ class MagnifierPainter extends CustomPainter {
       );
       
       // Вычисляем размер в см для масштабной линейки
-      // actualCaptureSize - это реальный размер области в пикселях исходного изображения
-      // pixelSpacing - это размер пикселя в мм
+      // Используем captureSizeInImagePixels (реальный размер области в пикселях исходного изображения)
+      // pixelSpacing - это размер пикселя в мм/пиксель
+      // Размер области в мм = количество пикселей * размер пикселя в мм
+      final actualCaptureSize = captureSizeInImagePixels;
       final sizeInMm = actualCaptureSize * pixelSpacing;
+      // Переводим мм в см (1 см = 10 мм)
       final sizeInCm = sizeInMm / 10.0;
+      
+      // Отладочный вывод (можно убрать после проверки)
+      // print("Лупа: actualCaptureSize=$actualCaptureSize px, pixelSpacing=$pixelSpacing мм/px, sizeInMm=$sizeInMm мм, sizeInCm=$sizeInCm см");
       
       // Подписи по горизонтали (0, 1, 2, 3, 4 см)
       for (int i = 0; i <= 4; i++) {
         final x = magnifierOffset.dx + i * gridStep;
-        final cmValue = (i * sizeInCm / 4).toStringAsFixed(1);
+        final cmValue = i * sizeInCm / 4;
+        String label;
+        if (i == 0) {
+          label = '0см';
+        } else {
+          // Форматируем значение: показываем с одним знаком после запятой, убираем лишние нули
+          String formattedValue;
+          if (cmValue == cmValue.roundToDouble()) {
+            // Если значение целое, показываем без десятичной части
+            formattedValue = cmValue.toInt().toString();
+          } else {
+            // Если есть дробная часть, показываем с одним знаком после запятой
+            formattedValue = cmValue.toStringAsFixed(1);
+            // Убираем лишние нули в конце
+            formattedValue = formattedValue.replaceAll(RegExp(r'\.?0+$'), '');
+          }
+          label = '$formattedValueсм';
+        }
         textPainter.text = TextSpan(
-          text: i == 0 ? '0см' : '$cmValue',
+          text: label,
           style: textStyle,
         );
         textPainter.layout();
@@ -1007,9 +1039,26 @@ class MagnifierPainter extends CustomPainter {
       // Подписи по вертикали (0, 1, 2, 3, 4 см)
       for (int i = 0; i <= 4; i++) {
         final y = magnifierOffset.dy + i * gridStep;
-        final cmValue = (i * sizeInCm / 4).toStringAsFixed(1);
+        final cmValue = i * sizeInCm / 4;
+        String label;
+        if (i == 0) {
+          label = '0см';
+        } else {
+          // Форматируем значение: показываем с одним знаком после запятой, убираем лишние нули
+          String formattedValue;
+          if (cmValue == cmValue.roundToDouble()) {
+            // Если значение целое, показываем без десятичной части
+            formattedValue = cmValue.toInt().toString();
+          } else {
+            // Если есть дробная часть, показываем с одним знаком после запятой
+            formattedValue = cmValue.toStringAsFixed(1);
+            // Убираем лишние нули в конце
+            formattedValue = formattedValue.replaceAll(RegExp(r'\.?0+$'), '');
+          }
+          label = '$formattedValueсм';
+        }
         textPainter.text = TextSpan(
-          text: i == 0 ? '0см' : '$cmValue',
+          text: label,
           style: textStyle,
         );
         textPainter.layout();
@@ -1071,6 +1120,7 @@ class MagnifierPainter extends CustomPainter {
            oldDelegate.size != size ||
            oldDelegate.zoom != zoom ||
            oldDelegate.decodedImage != decodedImage ||
+           oldDelegate.pixelSpacing != pixelSpacing ||
            oldDelegate.brightness != brightness ||
            oldDelegate.isInverted != isInverted ||
            oldDelegate.rotationAngle != rotationAngle;
@@ -1556,30 +1606,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 if (data['tags'] is Map) {
                   _dicomTags = (data['tags'] as Map)
                       .map((key, value) => MapEntry(key.toString(), value.toString()));
-                  print("Загружено тегов: ${_dicomTags.length}");
-                  print("Ключи тегов: ${_dicomTags.keys.toList()}");
-                  
-                  // Принудительно добавляем PixelSpacing, если его нет, но есть pixel_spacing_row
-                  if (!_dicomTags.containsKey('PixelSpacing') && data.containsKey('pixel_spacing_row')) {
-                    final psValue = (data['pixel_spacing_row'] as num).toDouble();
-                    _dicomTags['PixelSpacing'] = "${psValue.toStringAsFixed(3)} мм/пиксель (добавлено автоматически)";
-                    print("PixelSpacing принудительно добавлен в теги: ${_dicomTags['PixelSpacing']}");
-                  }
-                  
-                  if (_dicomTags.containsKey('PixelSpacing')) {
-                    print("PixelSpacing найден в тегах: ${_dicomTags['PixelSpacing']}");
-                  } else {
-                    print("ВНИМАНИЕ: PixelSpacing НЕ найден в тегах!");
-                  }
-                } else {
-                  print("ОШИБКА: data['tags'] не является Map, тип: ${data['tags'].runtimeType}");
-                  _dicomTags = {};
-                  // Если теги не пришли, но есть pixel_spacing_row, создаем теги
-                  if (data.containsKey('pixel_spacing_row')) {
-                    final psValue = (data['pixel_spacing_row'] as num).toDouble();
-                    _dicomTags['PixelSpacing'] = "${psValue.toStringAsFixed(3)} мм/пиксель (добавлено автоматически)";
-                    print("Создан словарь тегов с PixelSpacing: ${_dicomTags['PixelSpacing']}");
-                  }
                 }
                 if (data['report'] != null) {
                   _dicomReport = data['report'].toString();
@@ -1590,27 +1616,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _dicomTags.forEach((k, v) {
                   _tagControllers[k] = TextEditingController(text: v);
                 });
-                
-                // Убеждаемся, что PixelSpacing есть в контроллерах
-                if (_dicomTags.containsKey('PixelSpacing') && !_tagControllers.containsKey('PixelSpacing')) {
-                  _tagControllers['PixelSpacing'] = TextEditingController(text: _dicomTags['PixelSpacing']!);
-                  print("PixelSpacing добавлен в контроллеры");
-                }
-                final newPixelSpacing = (data['pixel_spacing_row'] as num).toDouble();
-                
-                // Обновляем калибровку всех существующих линеек при загрузке нового файла
-                if (_pixelSpacingRow != newPixelSpacing && _completedRulerLines.isNotEmpty) {
-                  print("Обновление калибровки линеек: старый PixelSpacing=${_pixelSpacingRow}, новый=${newPixelSpacing}");
-                  _completedRulerLines = _completedRulerLines.map((line) {
-                    return RulerLine(
-                      start: line.start,
-                      end: line.end,
-                      pixelSpacing: newPixelSpacing,
-                    );
-                  }).toList();
-                }
-                
-                _pixelSpacingRow = newPixelSpacing;
+                _pixelSpacingRow = (data['pixel_spacing_row'] as num).toDouble();
                 _windowCenter = (data['window_center'] as num).toDouble();
                 _windowWidth = (data['window_width'] as num).toDouble();
                 _initialWC = _windowCenter;
@@ -1618,7 +1624,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _isLoading = false;
                 
                 print("Все данные успешно установлены");
-                print("Автоматическая калибровка линейки: PixelSpacing=${_pixelSpacingRow} мм/пиксель");
               });
               
               // Загружаем сохраненные метаданные, если они есть
@@ -1662,9 +1667,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // Использует размер canvas для нормализации
   Offset _sceneToRelativeCoordinates(Offset scenePoint, Size canvasSize) {
     if (canvasSize.width <= 0 || canvasSize.height <= 0) return Offset.zero;
+    
+    // Применяем обратный поворот к координатам клика, если изображение повернуто
+    Offset rotatedPoint = scenePoint;
+    if (_rotationAngle != 0.0) {
+      final center = Offset(canvasSize.width / 2, canvasSize.height / 2);
+      final dx = scenePoint.dx - center.dx;
+      final dy = scenePoint.dy - center.dy;
+      final rotationRad = -_rotationAngle * 3.14159 / 180; // Обратный поворот
+      final cosR = cos(rotationRad);
+      final sinR = sin(rotationRad);
+      rotatedPoint = Offset(
+        center.dx + dx * cosR - dy * sinR,
+        center.dy + dx * sinR + dy * cosR,
+      );
+    }
+    
     return Offset(
-      scenePoint.dx / canvasSize.width,
-      scenePoint.dy / canvasSize.height,
+      rotatedPoint.dx / canvasSize.width,
+      rotatedPoint.dy / canvasSize.height,
     );
   }
   
@@ -1856,97 +1877,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
     
-    // Обрабатываем клик для инструмента угла (приоритет - быстрая обработка)
-    if (_currentTool == ToolMode.angle) {
-      setState(() {
-        if (_anglePoints.length == 0) {
-          // Первый клик - устанавливаем первую точку на первом луче
-          _anglePoints.add(sceneOffset);
-        } else if (_anglePoints.length == 1) {
-          // Второй клик - устанавливаем вершину угла
-          _anglePoints.add(sceneOffset);
-        } else if (_anglePoints.length == 2) {
-          // Третий клик - устанавливаем третью точку на втором луче и завершаем измерение
-          // Угол измеряется между точками 1 и 3, с вершиной в точке 2
-          _anglePoints.add(sceneOffset);
-          final canvasSize = _getCanvasSize();
-          final completedAngle = AngleMeasurement(
-            vertex: _sceneToRelativeCoordinates(_anglePoints[1], canvasSize),  // Вершина угла - вторая точка
-            point1: _sceneToRelativeCoordinates(_anglePoints[0], canvasSize),   // Первая точка на первом луче
-            point2: _sceneToRelativeCoordinates(_anglePoints[2], canvasSize),  // Третья точка на втором луче
-          );
-          _completedAngles = List.of(_completedAngles)..add(completedAngle);
-          _addToHistory(ActionType.angleAdded, null);
-          // Очищаем точки для следующего измерения
-          _anglePoints = [];
-        } else {
-          // Если по какой-то причине больше 3 точек, начинаем заново
-          _anglePoints = [sceneOffset];
-        }
-      });
-      return;
-    }
-    
-    // Обрабатываем клик только если активен инструмент линейки (приоритет - быстрая обработка)
-    if (_currentTool == ToolMode.ruler) {
-
-    // Определяем, зажат ли Ctrl в момент клика
-    final bool ctrlPressed = RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlLeft) ||
-                             RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlRight);
-
-    setState(() {
-      if (ctrlPressed) {
-        // Режим добавления сегментов при зажатом Ctrl
-        if (_rulerPoints.length == 1) {
-          // Завершаем текущую линию из точки-анкера в новую точку
-          final canvasSize = _getCanvasSize();
-          final completedLine = RulerLine(
-            start: _sceneToRelativeCoordinates(_rulerPoints[0], canvasSize),
-            end: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
-            pixelSpacing: _pixelSpacingRow,
-          );
-          _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
-          _addToHistory(ActionType.rulerAdded, null);
-          // Очищаем анкер после завершения сегмента
-          _rulerPoints = [];
-        } else if (_rulerPoints.isEmpty) {
-          // Нет ни точек, ни линий — ставим первую точку-анкер
-          _rulerPoints.add(sceneOffset);
-        } else if (_rulerPoints.length >= 2) {
-          // Если по какой-то причине осталось 2 точки, сбрасываем к одному анкеру
-          _rulerPoints = [sceneOffset];
-        }
-      } else {
-        // Режим без Ctrl: если была линия — удалить её и начать новую точку
-        if (_completedRulerLines.isNotEmpty) {
-          _completedRulerLines = [];
-        }
-
-        // Обычная логика построения: две клики создают линию
-        if (_rulerPoints.length == 0) {
-          _rulerPoints.add(sceneOffset);
-        } else if (_rulerPoints.length == 1) {
-          // Завершаем линию
-          final canvasSize = _getCanvasSize();
-          final completedLine = RulerLine(
-            start: _sceneToRelativeCoordinates(_rulerPoints[0], canvasSize),
-            end: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
-            pixelSpacing: _pixelSpacingRow,
-          );
-          _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
-          _addToHistory(ActionType.rulerAdded, null);
-          // Очищаем точки для следующего измерения
-          _rulerPoints = [];
-        } else {
-          // Если было больше 1 точки (неожиданно), начинаем заново
-          _rulerPoints = [sceneOffset];
-        }
-      }
-    });
-      return; // Выходим сразу после обработки линейки
-    }
-    
-    // Проверяем клик на существующие линии/углы (только если не в режиме линейки/угла)
+    // Проверяем клик на существующие линии/углы (в любом режиме, кроме создания новых)
     if (_rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
       // Проверяем клик на линейки (увеличенный хитбокс)
       final rulerIndex = _getRulerLineAtPoint(sceneOffset, 30.0);
@@ -1985,8 +1916,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _selectedRulerIndex = null;
         _selectedAngleIndex = null;
       });
-      
-      // Проверяем клик на текстовые аннотации и стрелки
+    }
+    
+    // Проверяем клик на текстовые аннотации и стрелки (в любом режиме, кроме создания новых)
+    if (_rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
+      // Проверяем клик на текстовые аннотации (увеличенный хитбокс)
       final textIndex = _getTextAnnotationAtPoint(sceneOffset, 50.0);
       if (textIndex != null) {
         setState(() {
@@ -2023,6 +1957,109 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _selectedTextIndex = null;
         _selectedArrowIndex = null;
       });
+    }
+    
+    // Обрабатываем клик для инструмента угла
+    if (_currentTool == ToolMode.angle) {
+      setState(() {
+        if (_anglePoints.length == 0) {
+          // Первый клик - устанавливаем первую точку на первом луче
+          _anglePoints.add(sceneOffset);
+          print("Угол: установлена первая точка на первом луче");
+        } else if (_anglePoints.length == 1) {
+          // Второй клик - устанавливаем вершину угла
+          _anglePoints.add(sceneOffset);
+          print("Угол: установлена вершина угла");
+        } else if (_anglePoints.length == 2) {
+          // Третий клик - устанавливаем третью точку на втором луче и завершаем измерение
+          // Угол измеряется между точками 1 и 3, с вершиной в точке 2
+          _anglePoints.add(sceneOffset);
+          final canvasSize = _getCanvasSize();
+          final completedAngle = AngleMeasurement(
+            vertex: _sceneToRelativeCoordinates(_anglePoints[1], canvasSize),  // Вершина угла - вторая точка
+            point1: _sceneToRelativeCoordinates(_anglePoints[0], canvasSize),   // Первая точка на первом луче
+            point2: _sceneToRelativeCoordinates(_anglePoints[2], canvasSize),  // Третья точка на втором луче
+          );
+          _completedAngles = List.of(_completedAngles)..add(completedAngle);
+          _addToHistory(ActionType.angleAdded, null);
+          print("Угол: завершено измерение, угол = ${completedAngle.getAngleDegrees(canvasSize).toStringAsFixed(1)}°");
+          // Очищаем точки для следующего измерения
+          _anglePoints = [];
+        } else {
+          // Если по какой-то причине больше 3 точек, начинаем заново
+          _anglePoints = [sceneOffset];
+        }
+      });
+      return;
+    }
+    
+    // Обрабатываем клик только если активен инструмент линейки
+    if (_currentTool != ToolMode.ruler) return;
+
+    // Определяем, зажат ли Ctrl в момент клика
+    final bool ctrlPressed = RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlLeft) ||
+                             RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlRight);
+
+    setState(() {
+      if (ctrlPressed) {
+        // Режим добавления сегментов при зажатом Ctrl
+        if (_rulerPoints.length == 1) {
+          // Завершаем текущую линию из точки-анкера в новую точку
+          final canvasSize = _getCanvasSize();
+          final completedLine = RulerLine(
+            start: _sceneToRelativeCoordinates(_rulerPoints[0], canvasSize),
+            end: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
+            pixelSpacing: _pixelSpacingRow,
+          );
+          _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
+          _addToHistory(ActionType.rulerAdded, null);
+          print("Линейка: добавлен сегмент Ctrl из анкера -> новая точка");
+          // Очищаем анкер после завершения сегмента
+          _rulerPoints = [];
+        } else if (_rulerPoints.isEmpty) {
+          // Нет ни точек, ни линий — ставим первую точку-анкер
+          _rulerPoints.add(sceneOffset);
+          print("Линейка: установлен анкер (Ctrl) в пустом состоянии");
+        } else if (_rulerPoints.length >= 2) {
+          // Если по какой-то причине осталось 2 точки, сбрасываем к одному анкеру
+          _rulerPoints = [sceneOffset];
+        }
+      } else {
+        // Режим без Ctrl: если была линия — удалить её и начать новую точку
+        if (_completedRulerLines.isNotEmpty) {
+          _completedRulerLines = [];
+          print("Линейка: без Ctrl — удалены все старые линии");
+        }
+
+        // Обычная логика построения: две клики создают линию
+        if (_rulerPoints.length == 0) {
+          _rulerPoints.add(sceneOffset);
+          print("Линейка: добавлена первая точка");
+        } else if (_rulerPoints.length == 1) {
+          // Завершаем линию
+          final canvasSize = _getCanvasSize();
+          final completedLine = RulerLine(
+            start: _sceneToRelativeCoordinates(_rulerPoints[0], canvasSize),
+            end: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
+            pixelSpacing: _pixelSpacingRow,
+          );
+          _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
+          _addToHistory(ActionType.rulerAdded, null);
+          print("Линейка: завершено измерение без Ctrl");
+          // Очищаем точки для следующего измерения
+          _rulerPoints = [];
+        } else {
+          // Если было больше 1 точки (неожиданно), начинаем заново
+          _rulerPoints = [sceneOffset];
+        }
+      }
+    });
+  }
+
+  void _handleDoubleTap() {
+    // Обрабатываем двойной клик для калибровки линейки
+    if (_selectedRulerIndex != null && _selectedRulerIndex! >= 0 && _selectedRulerIndex! < _completedRulerLines.length) {
+      _showCalibrateRulerDialog(_selectedRulerIndex!);
     }
   }
 
@@ -2651,13 +2688,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           });
         }
       }
-      
-      // Убеждаемся, что PixelSpacing всегда сохранен в тегах
-      if (!_dicomTags.containsKey('PixelSpacing') && _pixelSpacingRow > 0) {
-        _dicomTags['PixelSpacing'] = "${_pixelSpacingRow.toStringAsFixed(3)} мм/пиксель (автоматически)";
-        _tagControllers['PixelSpacing'] = TextEditingController(text: _dicomTags['PixelSpacing']!);
-        print("PixelSpacing автоматически добавлен при сохранении: ${_dicomTags['PixelSpacing']}");
-      }
 
       final dir = await getApplicationDocumentsDirectory();
       final metaDir = Directory('${dir.path}/dicom_metadata');
@@ -2794,33 +2824,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _dicomTags[key] = value;
             _tagControllers[key] = TextEditingController(text: value);
           });
-        }
-        
-        // Убеждаемся, что PixelSpacing есть в тегах после загрузки
-        // Если его нет, но есть pixel_spacing_row, добавляем его
-        if (!_dicomTags.containsKey('PixelSpacing') && data.containsKey('pixel_spacing_row')) {
-          final psValue = (data['pixel_spacing_row'] as num).toDouble();
-          _dicomTags['PixelSpacing'] = "${psValue.toStringAsFixed(3)} мм/пиксель (из сохраненных метаданных)";
-          _tagControllers['PixelSpacing'] = TextEditingController(text: _dicomTags['PixelSpacing']!);
-          print("PixelSpacing добавлен из сохраненных метаданных: ${_dicomTags['PixelSpacing']}");
-        }
-        
-        // Загружаем pixel_spacing_row для калибровки линеек
-        if (data.containsKey('pixel_spacing_row')) {
-          final loadedPixelSpacing = (data['pixel_spacing_row'] as num).toDouble();
-          // Обновляем калибровку всех линеек, если pixel_spacing изменился
-          if (_pixelSpacingRow != loadedPixelSpacing && _completedRulerLines.isNotEmpty) {
-            print("Обновление калибровки линеек при загрузке: старый=${_pixelSpacingRow}, новый=${loadedPixelSpacing}");
-            _completedRulerLines = _completedRulerLines.map((line) {
-              return RulerLine(
-                start: line.start,
-                end: line.end,
-                pixelSpacing: loadedPixelSpacing,
-              );
-            }).toList();
-          }
-          _pixelSpacingRow = loadedPixelSpacing;
-          print("Загружен pixel_spacing_row: $_pixelSpacingRow");
         }
         
         // Загружаем аннотации
@@ -2967,19 +2970,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     
     final line = _completedRulerLines[rulerIndex];
     
-    // ВАЖНО: Используем размер изображения, а не размер canvas!
-    // Canvas может быть масштабирован через InteractiveViewer, поэтому его размер не соответствует размеру изображения
+    // Используем размер изображения для вычисления расстояния
     final imageSize = _decodedImage != null 
         ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
         : _getCanvasSize();
     
-    // Вычисляем расстояние в пикселях изображения (не canvas!)
+    // Вычисляем расстояние в пикселях изображения
     final pixelDistance = line.getDistance(imageSize);
     
     // Текущее значение в мм с текущим PixelSpacing
     final currentRealDistanceMm = pixelDistance * line.pixelSpacing;
-    
-    print("Калибровка: pixelDistance=$pixelDistance px (размер изображения: ${imageSize.width}x${imageSize.height}), currentPixelSpacing=${line.pixelSpacing}, currentRealDistanceMm=$currentRealDistanceMm");
     
     final realSizeController = TextEditingController(
       text: currentRealDistanceMm.toStringAsFixed(1),
@@ -3030,13 +3030,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     // Формула: PixelSpacing (мм/пиксель) = Реальный размер (мм) / Пиксельное расстояние (пиксели)
                     final newPixelSpacing = realSizeMm / pixelDistance;
                     
-                    print("=== КАЛИБРОВКА ===");
-                    print("Введенный реальный размер: $realSizeMm мм");
-                    print("Пиксельное расстояние: $pixelDistance px");
-                    print("Вычисленный новый PixelSpacing: $newPixelSpacing мм/пиксель");
-                    print("Старый PixelSpacing: ${line.pixelSpacing} мм/пиксель");
-                    print("Размер изображения: ${imageSize.width}x${imageSize.height}");
-                    
                     setState(() {
                       // Обновляем PixelSpacing для всех линеек
                       _pixelSpacingRow = newPixelSpacing;
@@ -3048,19 +3041,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         );
                       }).toList();
                       
-                      // Обновляем тег PixelSpacing
-                      _dicomTags['PixelSpacing'] = "${newPixelSpacing.toStringAsFixed(3)} мм/пиксель (откалибровано вручную)";
-                      _tagControllers['PixelSpacing'] = TextEditingController(text: _dicomTags['PixelSpacing']!);
+                      // Обновляем тег PixelSpacing если он есть
+                      if (_dicomTags.containsKey('PixelSpacing')) {
+                        _dicomTags['PixelSpacing'] = "${newPixelSpacing.toStringAsFixed(3)} мм/пиксель (откалибровано вручную)";
+                        if (_tagControllers.containsKey('PixelSpacing')) {
+                          _tagControllers['PixelSpacing']?.dispose();
+                          _tagControllers['PixelSpacing'] = TextEditingController(text: _dicomTags['PixelSpacing']!);
+                        }
+                      }
                     });
-                    
-                    // Проверяем результат после калибровки
-                    final testLine = _completedRulerLines[rulerIndex];
-                    final testDistance = testLine.getDistance(imageSize);
-                    final testRealDistance = testDistance * newPixelSpacing;
-                    print("Проверка после калибровки:");
-                    print("  Пиксельное расстояние: $testDistance px");
-                    print("  Реальное расстояние: $testRealDistance мм (должно быть $realSizeMm мм)");
-                    print("==================");
                     
                     Navigator.of(ctx).pop();
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -3625,7 +3614,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   padding: const EdgeInsets.all(8.0),
                                   child: Column(
                                     children: [
-                                      Text("W/L: ${_windowCenter?.round()}/${_windowWidth?.round()} | PixelSpacing: ${_pixelSpacingRow.toStringAsFixed(3)} мм/px ${_isInverted ? '| Инвертировано' : ''} ${_rotationAngle != 0.0 ? '| Поворот: ${_rotationAngle.round()}°' : ''}",
+                                      Text("W/L: ${_windowCenter?.round()}/${_windowWidth?.round()} | ${(_pixelSpacingRow * 100).toStringAsFixed(1)}% ${_isInverted ? '| Инвертировано' : ''} ${_rotationAngle != 0.0 ? '| Поворот: ${_rotationAngle.round()}°' : ''}",
                                           style: const TextStyle(color: Colors.white, fontSize: 16)),
                                       if (_currentTool == ToolMode.brightness) ...[
                                         const SizedBox(height: 10),
@@ -3968,12 +3957,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               behavior: HitTestBehavior.opaque,
                                               onTapDown: _handleTap,
                                               onTapUp: _handleTapUp,
-                                              onDoubleTap: () {
-                                                // Двойной клик на выбранную линейку открывает калибровку
-                                                if (_selectedRulerIndex != null) {
-                                                  _showCalibrateRulerDialog(_selectedRulerIndex!);
-                                                }
-                                              },
+                                              onDoubleTap: _handleDoubleTap,
                                               onPanStart: _handlePanStart,
                                               onPanUpdate: _handlePanUpdate,
                                               onPanEnd: _handlePanEnd,
@@ -4041,32 +4025,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                         ),
                                                       ),
                                                   )),
-                                                  RepaintBoundary(
-                                                    child: CustomPaint(
-                                                      painter: RulerPainter(
-                                                        currentPoints: List.of(_rulerPoints), 
-                                                        completedLines: List.of(_completedRulerLines),
-                                                        pixelSpacing: _pixelSpacingRow,
-                                                        selectedIndex: _selectedRulerIndex,
-                                                        imageSize: _decodedImage != null 
-                                                          ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
-                                                          : null,
-                                                      ),
-                                                      child: Container(), // Пустой контейнер для предотвращения ошибок
+                                                  CustomPaint(
+                                                    painter: RulerPainter(
+                                                      currentPoints: List.of(_rulerPoints), 
+                                                      completedLines: List.of(_completedRulerLines),
+                                                      pixelSpacing: _pixelSpacingRow,
+                                                      selectedIndex: _selectedRulerIndex,
+                                                      imageSize: _decodedImage != null 
+                                                        ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
+                                                        : null,
+                                                      rotationAngle: _rotationAngle,
                                                     ),
+                                                    child: Container(), // Пустой контейнер для предотвращения ошибок
                                                   ),
-                                                  RepaintBoundary(
-                                                    child: CustomPaint(
-                                                      painter: AnglePainter(
-                                                        currentPoints: List.of(_anglePoints),
-                                                        completedAngles: List.of(_completedAngles),
-                                                        selectedIndex: _selectedAngleIndex,
-                                                        imageSize: _decodedImage != null 
-                                                          ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
-                                                          : null,
-                                                      ),
-                                                      child: Container(), // Пустой контейнер для предотвращения ошибок
+                                                  CustomPaint(
+                                                    painter: AnglePainter(
+                                                      currentPoints: List.of(_anglePoints),
+                                                      completedAngles: List.of(_completedAngles),
+                                                      selectedIndex: _selectedAngleIndex,
+                                                      imageSize: _decodedImage != null 
+                                                        ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
+                                                        : null,
+                                                      rotationAngle: _rotationAngle,
                                                     ),
+                                                    child: Container(), // Пустой контейнер для предотвращения ошибок
                                                   ),
                                                   CustomPaint(
                                                     painter: AnnotationPainter(
@@ -4123,11 +4105,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ),
                           // Панель с тегами и заключением (можно скрыть)
                           if (_showInfoPanel)
-                            RepaintBoundary(
-                              child: Container(
-                                width: 320,
-                                color: const Color(0xFF111111),
-                                child: Column(
+                            Container(
+                              width: 320,
+                              color: const Color(0xFF111111),
+                              child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Container(
@@ -4222,18 +4203,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               thumbVisibility: true,
                                               child: ListView(
                                                 controller: _tagsScrollController,
-                                                children: () {
-                                                  final entries = _dicomTags.entries.toList();
-                                                  entries.sort((a, b) {
-                                                    // Сортируем: PixelSpacing и ImagerPixelSpacing в начало
-                                                    final aKey = a.key.toLowerCase();
-                                                    final bKey = b.key.toLowerCase();
-                                                    if (aKey == 'pixelspacing' || aKey == 'imagerpixelspacing') return -1;
-                                                    if (bKey == 'pixelspacing' || bKey == 'imagerpixelspacing') return 1;
-                                                    return a.key.compareTo(b.key);
-                                                  });
-                                                  return entries;
-                                                }().map((e) {
+                                                children: _dicomTags.entries.map((e) {
                                                   if (_editInfo) {
                                                     _tagControllers.putIfAbsent(e.key, () => TextEditingController(text: e.value));
                                                     return Padding(
@@ -4303,7 +4273,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   ),
                                 ],
                               ),
-                            ),
                             ),
                         ],
                       )
