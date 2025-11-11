@@ -1195,6 +1195,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // Лупа: позиция курсора для отображения увеличенной области
   Offset? _magnifierPosition;
   bool _isMagnifierPressed = false; // Флаг зажатой ЛКМ для лупы
+  bool _isRightButtonPressed = false; // Флаг зажатой ПКМ для pan в режиме brightness
   double _magnifierSize = 200.0; // Размер лупы в пикселях
   double _magnifierZoom = 2.0; // Увеличение
   ui.Image? _decodedImage; // Кэшированное декодированное изображение для лупы
@@ -1228,11 +1229,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   
   // Переменные для яркости
   double _brightness = 1.0;
+  double _initialBrightness = 1.0;
+  // Переменные для контраста
+  double _contrast = 1.0;
+  double _initialContrast = 1.0;
+  // Переменные для отслеживания перетаскивания яркости/контраста
+  Offset? _brightnessDragStart;
+  double? _brightnessAtDragStart;
+  double? _contrastAtDragStart;
   // Ключ для захвата экрана (PNG)
   final GlobalKey _captureKey = GlobalKey();
   // Ключ для получения размера canvas
   final GlobalKey _canvasSizeKey = GlobalKey();
-  double _initialBrightness = 1.0;
   
   // Переменные для инверсии
   bool _isInverted = false;
@@ -1356,6 +1364,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _lastTapPosition = null;
       _magnifierPosition = null; // Очищаем позицию лупы
       _isMagnifierPressed = false; // Сбрасываем флаг зажатой ЛКМ
+      _isRightButtonPressed = false; // Сбрасываем флаг зажатой ПКМ
       _selectedRulerIndex = null; // Сбрасываем выделение линеек
       _selectedAngleIndex = null; // Сбрасываем выделение углов
       _selectedTextIndex = null; // Сбрасываем выделение текстовых аннотаций
@@ -1365,6 +1374,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _isDraggingText = false;
       _isDraggingArrow = false;
       _dragOffset = null;
+      // Сбрасываем переменные перетаскивания яркости/контраста
+      _brightnessDragStart = null;
+      _brightnessAtDragStart = null;
+      _contrastAtDragStart = null;
       
       // Переключаем инструмент
       _currentTool = newTool;
@@ -1487,6 +1500,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       
       // Сбрасываем все параметры
       _brightness = _initialBrightness;
+      _contrast = _initialContrast;
       _isInverted = _initialInverted;
       _rotationAngle = _initialRotationAngle;
       _windowCenter = _initialWC;
@@ -1540,6 +1554,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _actionHistory.clear(); // Очищаем историю действий
       _brightness = 1.0;
       _initialBrightness = 1.0;
+      _contrast = 1.0;
+      _initialContrast = 1.0;
       _isInverted = false;
       _initialInverted = false;
       _rotationAngle = 0.0;
@@ -1962,7 +1978,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final absEnd = line.getAbsoluteEnd(canvasSize);
         final distToLine = _pointToLineDistance(sceneOffset, absStart, absEnd);
         // Если клик близко к выделенной линейке, не создаем новую точку
-        if (distToLine <= 60.0) {
+        if (distToLine <= 30.0) {
           return;
         }
       }
@@ -1982,8 +1998,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final distToRay1 = _pointToLineDistance(sceneOffset, absVertex, absPoint1);
         final distToRay2 = _pointToLineDistance(sceneOffset, absVertex, absPoint2);
         // Если клик близко к выделенному углу, не создаем новую точку
-        if (distToVertex <= 60.0 || distToPoint1 <= 60.0 || distToPoint2 <= 60.0 || 
-            distToRay1 <= 60.0 || distToRay2 <= 60.0) {
+        if (distToVertex <= 30.0 || distToPoint1 <= 30.0 || distToPoint2 <= 30.0 || 
+            distToRay1 <= 30.0 || distToRay2 <= 30.0) {
           return;
         }
       }
@@ -2068,7 +2084,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   
   void _handleTapOnExistingMeasurements(Offset sceneOffset) {
     // Проверяем клик на существующие линии/углы
-    final rulerIndex = _getRulerLineAtPoint(sceneOffset, 30.0);
+    final rulerIndex = _getRulerLineAtPoint(sceneOffset, 15.0);
     if (rulerIndex != null) {
       setState(() {
         if (_selectedRulerIndex != rulerIndex) {
@@ -2081,7 +2097,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     
-    final angleIndex = _getAngleAtPoint(sceneOffset, 30.0);
+    final angleIndex = _getAngleAtPoint(sceneOffset, 20.0);
     if (angleIndex != null) {
       setState(() {
         if (_selectedAngleIndex != angleIndex) {
@@ -2420,10 +2436,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     
     // Проверяем наличие линеек и углов рядом
-    if (_getRulerLineAtPoint(sceneOffset, 60.0) != null) {
+    if (_getRulerLineAtPoint(sceneOffset, 15.0) != null) {
       return true;
     }
-    if (_getAngleAtPoint(sceneOffset, 60.0) != null) {
+    if (_getAngleAtPoint(sceneOffset, 30.0) != null) {
       return true;
     }
     
@@ -2445,6 +2461,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _matrixCacheValid = true;
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
+    
+    // ПРИОРИТЕТ 0: Обрабатываем начало перетаскивания для инструмента яркости (высший приоритет)
+    if (_currentTool == ToolMode.brightness) {
+      setState(() {
+        _brightnessDragStart = details.localPosition;
+        _brightnessAtDragStart = _brightness;
+        _contrastAtDragStart = _contrast;
+        // Сохраняем предыдущее значение в историю только при начале перетаскивания
+        _addToHistory(ActionType.brightnessChanged, _brightness);
+      });
+      return;
+    }
     
     // ПРИОРИТЕТ 1: Проверяем перетаскивание измерений (линеек и углов) в любом режиме
     // Это должно быть в самом начале, чтобы перетаскивание измерений имело приоритет над стандартным pan
@@ -2506,8 +2534,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final absStart = line.getAbsoluteStart(canvasSize);
         final absEnd = line.getAbsoluteEnd(canvasSize);
         final distToLine = _pointToLineDistance(sceneOffset, absStart, absEnd);
-        // Увеличенный threshold для лучшего UX
-        if (distToLine <= 60.0) {
+        // Уменьшенный threshold для более точного перетаскивания
+        if (distToLine <= 15.0) {
           setState(() {
             _isDraggingRuler = true;
             _dragOffset = sceneOffset;
@@ -2517,8 +2545,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       }
       
-      // Ищем ближайшую линейку, если ничего не выбрано (увеличенный хитбокс)
-      final rulerIndex = _getRulerLineAtPoint(sceneOffset, 60.0);
+      // Ищем ближайшую линейку, если ничего не выбрано (уменьшенный хитбокс)
+      final rulerIndex = _getRulerLineAtPoint(sceneOffset, 15.0);
       if (rulerIndex != null) {
         setState(() {
           _selectedRulerIndex = rulerIndex;
@@ -2546,9 +2574,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final distToRay1 = _pointToLineDistance(sceneOffset, absVertex, absPoint1);
         final distToRay2 = _pointToLineDistance(sceneOffset, absVertex, absPoint2);
         
-        // Увеличенный threshold для лучшего UX
-        if (distToVertex <= 60.0 || distToPoint1 <= 60.0 || distToPoint2 <= 60.0 || 
-            distToRay1 <= 60.0 || distToRay2 <= 60.0) {
+        // Уменьшенный threshold для более точного перетаскивания
+        if (distToVertex <= 30.0 || distToPoint1 <= 30.0 || distToPoint2 <= 30.0 || 
+            distToRay1 <= 30.0 || distToRay2 <= 30.0) {
           setState(() {
             _isDraggingAngle = true;
             _dragOffset = sceneOffset;
@@ -2558,8 +2586,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       }
       
-      // Ищем ближайший угол, если ничего не выбрано (увеличенный хитбокс)
-      final angleIndex = _getAngleAtPoint(sceneOffset, 60.0);
+      // Ищем ближайший угол, если ничего не выбрано (уменьшенный хитбокс)
+      final angleIndex = _getAngleAtPoint(sceneOffset, 30.0);
       if (angleIndex != null) {
         setState(() {
           _selectedAngleIndex = angleIndex;
@@ -2653,6 +2681,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _handlePanUpdate(DragUpdateDetails details) {
+    // ПРИОРИТЕТ 0: Обрабатываем перетаскивание для инструмента яркости (высший приоритет)
+    if (_currentTool == ToolMode.brightness && 
+        _brightnessDragStart != null && 
+        _brightnessAtDragStart != null && 
+        _contrastAtDragStart != null) {
+      final delta = details.localPosition - _brightnessDragStart!;
+      // Горизонтальное движение - контраст, вертикальное - яркость
+      // Используем чувствительность: 1 пиксель = 0.01 изменения
+      final contrastDelta = delta.dx * 0.01;
+      final brightnessDelta = -delta.dy * 0.01; // Инвертируем, чтобы вверх = больше яркости
+      
+      double newContrast = (_contrastAtDragStart! + contrastDelta).clamp(0.1, 3.0);
+      double newBrightness = (_brightnessAtDragStart! + brightnessDelta).clamp(0.1, 3.0);
+      
+      setState(() {
+        _contrast = newContrast;
+        _brightness = newBrightness;
+      });
+      return;
+    }
+    
     // Используем кэшированную матрицу для производительности
     if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
       _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
@@ -2765,6 +2814,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _isDraggingArrow = false;
         _dragOffset = null;
         _hasMeasurementNearPointer = false;
+      });
+      return;
+    }
+    
+    // Сбрасываем переменные перетаскивания яркости/контраста
+    if (_currentTool == ToolMode.brightness && _brightnessDragStart != null) {
+      setState(() {
+        _brightnessDragStart = null;
+        _brightnessAtDragStart = null;
+        _contrastAtDragStart = null;
       });
       return;
     }
@@ -3034,6 +3093,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         },
         'view_settings': {
           'brightness': _brightness,
+          'contrast': _contrast,
           'inverted': _isInverted,
           'rotation_deg': _rotationAngle,
         },
@@ -3220,6 +3280,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (viewSettings.containsKey('brightness')) {
             _brightness = (viewSettings['brightness'] ?? 1.0).toDouble();
             _initialBrightness = _brightness;
+          }
+          if (viewSettings.containsKey('contrast')) {
+            _contrast = (viewSettings['contrast'] ?? 1.0).toDouble();
+            _initialContrast = _contrast;
           }
           if (viewSettings.containsKey('inverted')) {
             _isInverted = viewSettings['inverted'] ?? false;
@@ -3486,6 +3550,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         'rotation_deg': _rotationAngle, // в градусах, кратно 90
         'inverted': _isInverted,
         'brightness': _brightness,
+        'contrast': _contrast,
       });
       // НЕ отправляем аннотации на сервер - они остаются отдельным редактируемым слоем
       // Аннотации сохраняются только в JSON файл локально
@@ -3883,6 +3948,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                       
                                       // Сбрасываем все параметры
                                       _brightness = _initialBrightness;
+                                      _contrast = _initialContrast;
                                       _isInverted = _initialInverted;
                                       _rotationAngle = _initialRotationAngle;
                                       _windowCenter = _initialWC;
@@ -3912,39 +3978,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   padding: const EdgeInsets.all(8.0),
                                   child: Column(
                                     children: [
-                                      Text("W/L: ${_windowCenter?.round()}/${_windowWidth?.round()} | ${(_pixelSpacingRow * 100).toStringAsFixed(1)}% ${_isInverted ? '| Инвертировано' : ''} ${_rotationAngle != 0.0 ? '| Поворот: ${_rotationAngle.round()}°' : ''}",
+                                      Text("W/L: ${_windowCenter?.round()}/${_windowWidth?.round()} | ${(_pixelSpacingRow * 100).toStringAsFixed(1)}% ${_isInverted ? '| Инвертировано' : ''} ${_rotationAngle != 0.0 ? '| Поворот: ${_rotationAngle.round()}°' : ''}${_currentTool == ToolMode.brightness ? ' | Яркость: ${_brightness.toStringAsFixed(1)} | Контраст: ${_contrast.toStringAsFixed(1)}' : ''}",
                                           style: const TextStyle(color: Colors.white, fontSize: 16)),
                                       if (_currentTool == ToolMode.brightness) ...[
-                                        const SizedBox(height: 10),
-                                        
-                                        const SizedBox(height: 10),
-                                        Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const Text("Яркость: ", style: TextStyle(color: Colors.white, fontSize: 14)),
-                                            SizedBox(
-                                              width: 200,
-                                              child: Slider(
-                                                value: _brightness,
-                                                min: 0.1,
-                                                max: 3.0,
-                                                divisions: 29,
-                                                activeColor: Colors.lightBlueAccent,
-                                                inactiveColor: Colors.grey,
-                                                onChanged: (value) {
-                                                  // Сохраняем предыдущее значение в историю
-                                                  _addToHistory(ActionType.brightnessChanged, _brightness);
-                                                  setState(() {
-                                                    _brightness = value;
-                                                  });
-                                                  // Яркость теперь обрабатывается прямо во Flutter, не нужны запросы на сервер
-                                                },
-                                              ),
-                                            ),
-                                            Text("${_brightness.toStringAsFixed(1)}", 
-                                                style: const TextStyle(color: Colors.white, fontSize: 14)),
-                                          ],
-                                        ),
+                                        const SizedBox(height: 5),
+                                        const Text("Зажмите ЛКМ и двигайте: ↔ контраст, ↕ яркость", 
+                                            style: TextStyle(color: Colors.grey, fontSize: 12)),
                                       ],
                                     ],
                                   ),
@@ -3959,6 +3998,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                 // Ранний перехват для проверки измерений и блокировки pan
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerDown(event);
+                                                } else if (_currentTool == ToolMode.brightness && event.buttons == 1) {
+                                                  // Обрабатываем начало перетаскивания для инструмента яркости (ЛКМ)
+                                                  setState(() {
+                                                    _brightnessDragStart = event.localPosition;
+                                                    _brightnessAtDragStart = _brightness;
+                                                    _contrastAtDragStart = _contrast;
+                                                    _addToHistory(ActionType.brightnessChanged, _brightness);
+                                                  });
+                                                } else if (_currentTool == ToolMode.brightness && event.buttons == 2) {
+                                                  // Обрабатываем зажатие ПКМ для pan
+                                                  setState(() {
+                                                    _isRightButtonPressed = true;
+                                                  });
                                                 } else {
                                                   // Проверяем наличие измерений рядом с указателем
                                                   final hasMeasurement = _checkMeasurementNearPointer(event.localPosition);
@@ -3989,7 +4041,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                       return;
                                                     }
                                                     
-                                                    final rulerIndex = _getRulerLineAtPoint(sceneOffset, 60.0);
+                                                    final rulerIndex = _getRulerLineAtPoint(sceneOffset, 15.0);
                                                     if (rulerIndex != null) {
                                                       setState(() {
                                                         _selectedRulerIndex = rulerIndex;
@@ -4013,7 +4065,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                       return;
                                                     }
                                                     
-                                                    final angleIndex = _getAngleAtPoint(sceneOffset, 60.0);
+                                                    final angleIndex = _getAngleAtPoint(sceneOffset, 30.0);
                                                     if (angleIndex != null) {
                                                       setState(() {
                                                         _selectedAngleIndex = angleIndex;
@@ -4034,7 +4086,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                       final absStart = line.getAbsoluteStart(canvasSize);
                                                       final absEnd = line.getAbsoluteEnd(canvasSize);
                                                       final distToLine = _pointToLineDistance(sceneOffset, absStart, absEnd);
-                                                      if (distToLine <= 60.0) {
+                                                      if (distToLine <= 15.0) {
                                                         setState(() {
                                                           _isDraggingRuler = true;
                                                           _dragOffset = sceneOffset;
@@ -4057,8 +4109,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                       final distToRay1 = _pointToLineDistance(sceneOffset, absVertex, absPoint1);
                                                       final distToRay2 = _pointToLineDistance(sceneOffset, absVertex, absPoint2);
                                                       
-                                                      if (distToVertex <= 60.0 || distToPoint1 <= 60.0 || distToPoint2 <= 60.0 || 
-                                                          distToRay1 <= 60.0 || distToRay2 <= 60.0) {
+                                                      if (distToVertex <= 30.0 || distToPoint1 <= 30.0 || distToPoint2 <= 30.0 || 
+                                                          distToRay1 <= 30.0 || distToRay2 <= 30.0) {
                                                         setState(() {
                                                           _isDraggingAngle = true;
                                                           _dragOffset = sceneOffset;
@@ -4121,6 +4173,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               onPointerUp: (PointerUpEvent event) {
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerUp(event);
+                                                } else if (_currentTool == ToolMode.brightness && _brightnessDragStart != null) {
+                                                  // Завершаем перетаскивание яркости/контраста
+                                                  setState(() {
+                                                    _brightnessDragStart = null;
+                                                    _brightnessAtDragStart = null;
+                                                    _contrastAtDragStart = null;
+                                                  });
+                                                } else if (_currentTool == ToolMode.brightness && _isRightButtonPressed) {
+                                                  // Завершаем pan при отпускании ПКМ
+                                                  setState(() {
+                                                    _isRightButtonPressed = false;
+                                                  });
                                                 } else if (_isDraggingRuler || _isDraggingAngle || _isDraggingText || _isDraggingArrow) {
                                                   // Завершаем перетаскивание
                                                   setState(() {
@@ -4136,6 +4200,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               onPointerMove: (PointerMoveEvent event) {
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerMove(event);
+                                                } else if (_currentTool == ToolMode.brightness && 
+                                                    _brightnessDragStart != null && 
+                                                    _brightnessAtDragStart != null && 
+                                                    _contrastAtDragStart != null) {
+                                                  // Обрабатываем перетаскивание для инструмента яркости
+                                                  final delta = event.localPosition - _brightnessDragStart!;
+                                                  final contrastDelta = delta.dx * 0.01;
+                                                  final brightnessDelta = -delta.dy * 0.01;
+                                                  
+                                                  double newContrast = (_contrastAtDragStart! + contrastDelta).clamp(0.1, 3.0);
+                                                  double newBrightness = (_brightnessAtDragStart! + brightnessDelta).clamp(0.1, 3.0);
+                                                  
+                                                  setState(() {
+                                                    _contrast = newContrast;
+                                                    _brightness = newBrightness;
+                                                  });
+                                                } else if (_currentTool == ToolMode.brightness && event.buttons == 2) {
+                                                  // Обновляем состояние ПКМ при движении для pan
+                                                  if (!_isRightButtonPressed) {
+                                                    setState(() {
+                                                      _isRightButtonPressed = true;
+                                                    });
+                                                  }
                                                 } else {
                                                   // Обновляем флаг при движении указателя
                                                   final hasMeasurement = _checkMeasurementNearPointer(event.localPosition);
@@ -4242,21 +4329,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                 }
                                               },
                                               onPointerSignal: (PointerSignalEvent event) {
-                                                // Обрабатываем колёсико мыши только когда активен инструмент яркости
-                                                if (event is PointerScrollEvent && _currentTool == ToolMode.brightness) {
-                                                  // Изменяем яркость в зависимости от направления прокрутки
-                                                  double delta = event.scrollDelta.dy > 0 ? -0.1 : 0.1;
-                                                  double newBrightness = (_brightness + delta).clamp(0.1, 3.0);
-                                                  
-                                                  // Проверяем, изменилось ли значение
-                                                  if (newBrightness != _brightness) {
-                                                    // Сохраняем предыдущее значение в историю
-                                                    _addToHistory(ActionType.brightnessChanged, _brightness);
-                                                    setState(() {
-                                                      _brightness = newBrightness;
-                                                    });
-                                                  }
-                                                }
+                                                // Колесико мыши теперь работает для масштабирования через InteractiveViewer
                                               },
                                               child: GestureDetector(
                                               behavior: HitTestBehavior.opaque,
@@ -4270,8 +4343,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                 absorbing: _isDraggingRuler || _isDraggingAngle || _isDraggingText || _isDraggingArrow,
                                                 child: InteractiveViewer(
                                                   transformationController: _transformationController,
-                                                  panEnabled: _currentTool == ToolMode.pan && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingText && !_isDraggingArrow && !_hasMeasurementNearPointer,
-                                                  scaleEnabled: _currentTool == ToolMode.pan && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingText && !_isDraggingArrow && !_hasMeasurementNearPointer,
+                                                  panEnabled: (_currentTool == ToolMode.pan || (_currentTool == ToolMode.brightness && _isRightButtonPressed)) && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingText && !_isDraggingArrow && !_hasMeasurementNearPointer && _brightnessDragStart == null,
+                                                  scaleEnabled: (_currentTool == ToolMode.pan || _currentTool == ToolMode.brightness) && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingText && !_isDraggingArrow && !_hasMeasurementNearPointer && _brightnessDragStart == null,
                                                 minScale: 0.1, maxScale: 8.0,
                                                 child: RepaintBoundary(
                                                   key: _captureKey,
@@ -4283,17 +4356,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                     Container(color: Colors.black),
                                                     // Применяем яркость, инверсию и поворот прямо во Flutter
                                                     ClipRect(
-                                                    child: Transform.rotate(
+                                                      child: Transform.rotate(
                                                       angle: _rotationAngle * 3.14159 / 180, // Конвертируем градусы в радианы
                                                       child: ColorFiltered(
+                                                        // Применяем контраст: (pixel - 128) * contrast + 128
                                                         colorFilter: ColorFilter.matrix([
-                                                          _brightness, 0, 0, 0, 0,  // Red
-                                                          0, _brightness, 0, 0, 0,  // Green  
-                                                          0, 0, _brightness, 0, 0,  // Blue
-                                                          0, 0, 0, 1, 0,            // Alpha
+                                                          _contrast, 0, 0, 0, 128 * (1 - _contrast),  // Red
+                                                          0, _contrast, 0, 0, 128 * (1 - _contrast),  // Green
+                                                          0, 0, _contrast, 0, 128 * (1 - _contrast),  // Blue
+                                                          0, 0, 0, 1, 0,                              // Alpha
                                                         ]),
                                                         child: ColorFiltered(
-                                                          colorFilter: _isInverted ? ColorFilter.matrix([
+                                                          // Применяем яркость после контраста
+                                                          colorFilter: ColorFilter.matrix([
+                                                            _brightness, 0, 0, 0, 0,  // Red
+                                                            0, _brightness, 0, 0, 0,  // Green  
+                                                            0, 0, _brightness, 0, 0,  // Blue
+                                                            0, 0, 0, 1, 0,            // Alpha
+                                                          ]),
+                                                          child: ColorFiltered(
+                                                            colorFilter: _isInverted ? ColorFilter.matrix([
                                                             -1, 0, 0, 0, 255,  // Инверсия красного
                                                             0, -1, 0, 0, 255,  // Инверсия зеленого
                                                             0, 0, -1, 0, 255,  // Инверсия синего
@@ -4329,7 +4411,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                               ),
                                                         ),
                                                       ),
-                                                  )),
+                                                    ),
+                                                  ), // Закрываем Transform.rotate
+                                                  ), // Закрываем ClipRect
                                                   CustomPaint(
                                                     painter: RulerPainter(
                                                       currentPoints: _isCalibrationMode ? List.of(_calibrationPoints) : List.of(_rulerPoints), 
