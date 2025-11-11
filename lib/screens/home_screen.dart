@@ -1222,6 +1222,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Matrix4? _cachedInvertedMatrix;
   bool _matrixCacheValid = false;
   
+  // Кэш для размера canvas
+  Size? _cachedCanvasSize;
+  bool _canvasSizeCacheValid = false;
+  
   // Переменные для яркости
   double _brightness = 1.0;
   // Ключ для захвата экрана (PNG)
@@ -1424,6 +1428,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _matrixCacheValid = false;
     });
     
+    // Инвалидируем кэш размера canvas при изменении размера
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _canvasSizeCacheValid = false;
+    });
+    
     // Слушаем изменения размера окна
     WidgetsBinding.instance.addObserver(this);
   }
@@ -1445,9 +1454,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeMetrics() {
     super.didChangeMetrics();
-    // Инвалидируем кэш матрицы при изменении размера окна
+    // Инвалидируем кэш матрицы и размера canvas при изменении размера окна
     setState(() {
       _matrixCacheValid = false;
+      _canvasSizeCacheValid = false;
     });
   }
   
@@ -1735,17 +1745,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // Используем реальный размер canvas для нормализации координат
   // Это гарантирует, что координаты останутся на месте при изменении размера окна
   Size _getCanvasSize() {
+    // Используем кэш если он валиден
+    if (_canvasSizeCacheValid && _cachedCanvasSize != null) {
+      return _cachedCanvasSize!;
+    }
+    
     // Пытаемся получить размер canvas из RenderBox
     final renderBox = _canvasSizeKey.currentContext?.findRenderObject() as RenderBox?;
     if (renderBox != null && renderBox.hasSize) {
-      return renderBox.size;
+      _cachedCanvasSize = renderBox.size;
+      _canvasSizeCacheValid = true;
+      return _cachedCanvasSize!;
     }
     // Если не удалось получить размер canvas, используем размер изображения как fallback
     if (_decodedImage != null) {
-      return Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble());
+      _cachedCanvasSize = Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble());
+      _canvasSizeCacheValid = true;
+      return _cachedCanvasSize!;
     }
     // Если изображение не загружено, используем размер по умолчанию
-    return const Size(1000, 1000);
+    _cachedCanvasSize = const Size(1000, 1000);
+    _canvasSizeCacheValid = true;
+    return _cachedCanvasSize!;
   }
 
   // Проверяет, находится ли точка рядом с линией
@@ -1911,202 +1932,253 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
     
-    // Проверяем клик на существующие линии/углы (в любом режиме, кроме создания новых)
+    // ПРИОРИТЕТ: Проверяем, не кликнули ли на drag handle выделенного измерения
+    // Если да, то не создаем новую точку, позволим перетаскиванию обработать
     if (_rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
-      // Проверяем клик на линейки (увеличенный хитбокс)
-      final rulerIndex = _getRulerLineAtPoint(sceneOffset, 30.0);
-      if (rulerIndex != null) {
-        setState(() {
-          // Не снимаем выделение при повторном клике, только переключаем если выбрана другая
-          if (_selectedRulerIndex != rulerIndex) {
-            _selectedRulerIndex = rulerIndex;
-            _selectedAngleIndex = null;
-            _selectedTextIndex = null;
-            _selectedArrowIndex = null;
-          }
-          // Если уже выбрана та же линейка, не снимаем выделение
-        });
+      // Проверяем drag handles только для выделенных измерений
+      if (_selectedRulerIndex != null && 
+          _selectedRulerIndex! >= 0 && 
+          _selectedRulerIndex! < _completedRulerLines.length &&
+          _isPointOnRulerDragHandle(sceneOffset, _selectedRulerIndex!)) {
+        // Клик на drag handle - не создаем новую точку, позволим перетаскиванию обработать
+        return;
+      }
+      if (_selectedAngleIndex != null && 
+          _selectedAngleIndex! >= 0 && 
+          _selectedAngleIndex! < _completedAngles.length &&
+          _isPointOnAngleDragHandle(sceneOffset, _selectedAngleIndex!)) {
+        // Клик на drag handle - не создаем новую точку
         return;
       }
       
-      // Проверяем клик на углы (увеличенный хитбокс)
-      final angleIndex = _getAngleAtPoint(sceneOffset, 30.0);
-      if (angleIndex != null) {
-        setState(() {
-          // Не снимаем выделение при повторном клике, только переключаем если выбран другой
-          if (_selectedAngleIndex != angleIndex) {
-            _selectedAngleIndex = angleIndex;
-            _selectedRulerIndex = null;
-            _selectedTextIndex = null;
-            _selectedArrowIndex = null;
-          }
-          // Если уже выбран тот же угол, не снимаем выделение
-        });
-        return;
+      // Проверяем, не кликнули ли на саму выделенную линейку (не на drag handle, а на саму линию)
+      // Это нужно для начала перетаскивания при клике на линию
+      if (_selectedRulerIndex != null && 
+          _selectedRulerIndex! >= 0 && 
+          _selectedRulerIndex! < _completedRulerLines.length) {
+        final canvasSize = _getCanvasSize();
+        final line = _completedRulerLines[_selectedRulerIndex!];
+        final absStart = line.getAbsoluteStart(canvasSize);
+        final absEnd = line.getAbsoluteEnd(canvasSize);
+        final distToLine = _pointToLineDistance(sceneOffset, absStart, absEnd);
+        // Если клик близко к выделенной линейке, не создаем новую точку
+        if (distToLine <= 60.0) {
+          return;
+        }
       }
       
-      // Если клик не на линейку или угол, снимаем их выделение
-      setState(() {
-        _selectedRulerIndex = null;
-        _selectedAngleIndex = null;
-      });
+      // Проверяем, не кликнули ли на сам выделенный угол
+      if (_selectedAngleIndex != null && 
+          _selectedAngleIndex! >= 0 && 
+          _selectedAngleIndex! < _completedAngles.length) {
+        final canvasSize = _getCanvasSize();
+        final angle = _completedAngles[_selectedAngleIndex!];
+        final absVertex = angle.getAbsoluteVertex(canvasSize);
+        final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+        final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+        final distToVertex = (sceneOffset - absVertex).distance;
+        final distToPoint1 = (sceneOffset - absPoint1).distance;
+        final distToPoint2 = (sceneOffset - absPoint2).distance;
+        final distToRay1 = _pointToLineDistance(sceneOffset, absVertex, absPoint1);
+        final distToRay2 = _pointToLineDistance(sceneOffset, absVertex, absPoint2);
+        // Если клик близко к выделенному углу, не создаем новую точку
+        if (distToVertex <= 60.0 || distToPoint1 <= 60.0 || distToPoint2 <= 60.0 || 
+            distToRay1 <= 60.0 || distToRay2 <= 60.0) {
+          return;
+        }
+      }
     }
     
-    // Проверяем клик на текстовые аннотации и стрелки (в любом режиме, кроме создания новых)
-    if (_rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
-      // Проверяем клик на текстовые аннотации (увеличенный хитбокс)
-      final textIndex = _getTextAnnotationAtPoint(sceneOffset, 50.0);
-      if (textIndex != null) {
-        setState(() {
-          // Не снимаем выделение при повторном клике, только переключаем если выбрана другая
-          if (_selectedTextIndex != textIndex) {
-            _selectedTextIndex = textIndex;
-            _selectedRulerIndex = null;
-            _selectedAngleIndex = null;
-            _selectedArrowIndex = null;
-          }
-          // Если уже выбрана та же аннотация, не снимаем выделение
-        });
-        return;
-      }
-      
-      // Проверяем клик на стрелки (увеличенный хитбокс)
-      final arrowIndex = _getArrowAnnotationAtPoint(sceneOffset, 30.0);
-      if (arrowIndex != null) {
-        setState(() {
-          // Не снимаем выделение при повторном клике, только переключаем если выбрана другая
-          if (_selectedArrowIndex != arrowIndex) {
-            _selectedArrowIndex = arrowIndex;
-            _selectedRulerIndex = null;
-            _selectedAngleIndex = null;
-            _selectedTextIndex = null;
-          }
-          // Если уже выбрана та же стрелка, не снимаем выделение
-        });
-        return;
-      }
-      
-      // Если клик не на аннотацию, снимаем выделение
-      setState(() {
-        _selectedTextIndex = null;
-        _selectedArrowIndex = null;
-      });
-    }
-    
-    // Обрабатываем клик для инструмента угла
+    // Обрабатываем клик для инструмента угла (максимально быстро)
     if (_currentTool == ToolMode.angle) {
+      final int currentLength = _anglePoints.length;
+      final bool willComplete = currentLength == 2;
+      final List<Offset> pointsToComplete = willComplete ? List.from(_anglePoints) : [];
+      
+      // Немедленно обновляем точки
       setState(() {
-        if (_anglePoints.length == 0) {
-          // Первый клик - устанавливаем первую точку на первом луче
+        if (currentLength == 0) {
           _anglePoints.add(sceneOffset);
-          print("Угол: установлена первая точка на первом луче");
-        } else if (_anglePoints.length == 1) {
-          // Второй клик - устанавливаем вершину угла
+        } else if (currentLength == 1) {
           _anglePoints.add(sceneOffset);
-          print("Угол: установлена вершина угла");
-        } else if (_anglePoints.length == 2) {
-          // Третий клик - устанавливаем третью точку на втором луче и завершаем измерение
-          // Угол измеряется между точками 1 и 3, с вершиной в точке 2
+        } else if (currentLength == 2) {
           _anglePoints.add(sceneOffset);
-          final canvasSize = _getCanvasSize();
-          final completedAngle = AngleMeasurement(
-            vertex: _sceneToRelativeCoordinates(_anglePoints[1], canvasSize),  // Вершина угла - вторая точка
-            point1: _sceneToRelativeCoordinates(_anglePoints[0], canvasSize),   // Первая точка на первом луче
-            point2: _sceneToRelativeCoordinates(_anglePoints[2], canvasSize),  // Третья точка на втором луче
-          );
-          _completedAngles = List.of(_completedAngles)..add(completedAngle);
-          _addToHistory(ActionType.angleAdded, null);
-          print("Угол: завершено измерение, угол = ${completedAngle.getAngleDegrees(canvasSize).toStringAsFixed(1)}°");
-          // Очищаем точки для следующего измерения
-          _anglePoints = [];
         } else {
-          // Если по какой-то причине больше 3 точек, начинаем заново
           _anglePoints = [sceneOffset];
         }
       });
+      
+      // Завершаем угол через микротаск для минимальной задержки
+      if (willComplete && pointsToComplete.length == 2) {
+        scheduleMicrotask(() {
+          final canvasSize = _getCanvasSize();
+          final completedAngle = AngleMeasurement(
+            vertex: _sceneToRelativeCoordinates(pointsToComplete[1], canvasSize),
+            point1: _sceneToRelativeCoordinates(pointsToComplete[0], canvasSize),
+            point2: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
+          );
+          setState(() {
+            _completedAngles = List.of(_completedAngles)..add(completedAngle);
+            _addToHistory(ActionType.angleAdded, null);
+            _anglePoints = [];
+          });
+        });
+      }
       return;
     }
     
     // Обрабатываем клик только если активен инструмент линейки
-    if (_currentTool != ToolMode.ruler) return;
-
-    // Режим калибровки
+    if (_currentTool != ToolMode.ruler) {
+      // Проверки на существующие элементы только если не создаем новые
+      if (_rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
+        scheduleMicrotask(() {
+          _handleTapOnExistingMeasurements(sceneOffset);
+        });
+      }
+      return;
+    }
+    
+    // Режим калибровки - быстрая обработка
     if (_isCalibrationMode) {
       setState(() {
         if (_calibrationPoints.length == 0) {
           _calibrationPoints.add(sceneOffset);
-          print("Калибровка: добавлена первая точка");
         } else if (_calibrationPoints.length == 1) {
           _calibrationPoints.add(sceneOffset);
-          print("Калибровка: добавлена вторая точка");
-          // Показываем диалог для ввода значения в мм
-          _showCalibrationInputDialog();
+          scheduleMicrotask(() {
+            _showCalibrationInputDialog();
+          });
         } else {
-          // Если уже есть две точки, начинаем заново
           _calibrationPoints = [sceneOffset];
         }
       });
       return;
     }
-
+    
+    // Обрабатываем линейку - максимально быстро
+    _handleRulerTap(sceneOffset);
+    
+    // Проверки на существующие элементы только если не создаем новые
+    if (_rulerPoints.isEmpty) {
+      scheduleMicrotask(() {
+        _handleTapOnExistingMeasurements(sceneOffset);
+      });
+    }
+  }
+  
+  void _handleTapOnExistingMeasurements(Offset sceneOffset) {
+    // Проверяем клик на существующие линии/углы
+    final rulerIndex = _getRulerLineAtPoint(sceneOffset, 30.0);
+    if (rulerIndex != null) {
+      setState(() {
+        if (_selectedRulerIndex != rulerIndex) {
+          _selectedRulerIndex = rulerIndex;
+          _selectedAngleIndex = null;
+          _selectedTextIndex = null;
+          _selectedArrowIndex = null;
+        }
+      });
+      return;
+    }
+    
+    final angleIndex = _getAngleAtPoint(sceneOffset, 30.0);
+    if (angleIndex != null) {
+      setState(() {
+        if (_selectedAngleIndex != angleIndex) {
+          _selectedAngleIndex = angleIndex;
+          _selectedRulerIndex = null;
+          _selectedTextIndex = null;
+          _selectedArrowIndex = null;
+        }
+      });
+      return;
+    }
+    
+    final textIndex = _getTextAnnotationAtPoint(sceneOffset, 50.0);
+    if (textIndex != null) {
+      setState(() {
+        if (_selectedTextIndex != textIndex) {
+          _selectedTextIndex = textIndex;
+          _selectedRulerIndex = null;
+          _selectedAngleIndex = null;
+          _selectedArrowIndex = null;
+        }
+      });
+      return;
+    }
+    
+    final arrowIndex = _getArrowAnnotationAtPoint(sceneOffset, 30.0);
+    if (arrowIndex != null) {
+      setState(() {
+        if (_selectedArrowIndex != arrowIndex) {
+          _selectedArrowIndex = arrowIndex;
+          _selectedRulerIndex = null;
+          _selectedAngleIndex = null;
+          _selectedTextIndex = null;
+        }
+      });
+      return;
+    }
+    
+    // Снимаем выделение если клик не на элемент
+    setState(() {
+      _selectedRulerIndex = null;
+      _selectedAngleIndex = null;
+      _selectedTextIndex = null;
+      _selectedArrowIndex = null;
+    });
+  }
+  
+  void _handleRulerTap(Offset sceneOffset) {
     // Определяем, зажат ли Ctrl в момент клика
     final bool ctrlPressed = RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlLeft) ||
                              RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlRight);
 
+    // Сохраняем состояние до обновления
+    final int currentLength = _rulerPoints.length;
+    final bool willCompleteLine = currentLength == 1;
+    final Offset? firstPoint = willCompleteLine && _rulerPoints.isNotEmpty ? _rulerPoints[0] : null;
+    final bool shouldClearLines = !ctrlPressed && _completedRulerLines.isNotEmpty && currentLength == 0;
+
+    // Немедленно обновляем точки для мгновенного отображения
     setState(() {
       if (ctrlPressed) {
-        // Режим добавления сегментов при зажатом Ctrl
-        if (_rulerPoints.length == 1) {
-          // Завершаем текущую линию из точки-анкера в новую точку
-          final canvasSize = _getCanvasSize();
-          final completedLine = RulerLine(
-            start: _sceneToRelativeCoordinates(_rulerPoints[0], canvasSize),
-            end: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
-            pixelSpacing: _pixelSpacingRow,
-          );
-          _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
-          _addToHistory(ActionType.rulerAdded, null);
-          print("Линейка: добавлен сегмент Ctrl из анкера -> новая точка");
-          // Очищаем анкер после завершения сегмента
+        if (currentLength == 1) {
           _rulerPoints = [];
-        } else if (_rulerPoints.isEmpty) {
-          // Нет ни точек, ни линий — ставим первую точку-анкер
+        } else if (currentLength == 0) {
           _rulerPoints.add(sceneOffset);
-          print("Линейка: установлен анкер (Ctrl) в пустом состоянии");
-        } else if (_rulerPoints.length >= 2) {
-          // Если по какой-то причине осталось 2 точки, сбрасываем к одному анкеру
+        } else {
           _rulerPoints = [sceneOffset];
         }
       } else {
-        // Режим без Ctrl: если была линия — удалить её и начать новую точку
-        if (_completedRulerLines.isNotEmpty) {
+        if (shouldClearLines) {
           _completedRulerLines = [];
-          print("Линейка: без Ctrl — удалены все старые линии");
         }
-
-        // Обычная логика построения: две клики создают линию
-        if (_rulerPoints.length == 0) {
+        if (currentLength == 0) {
           _rulerPoints.add(sceneOffset);
-          print("Линейка: добавлена первая точка");
-        } else if (_rulerPoints.length == 1) {
-          // Завершаем линию
-          final canvasSize = _getCanvasSize();
-          final completedLine = RulerLine(
-            start: _sceneToRelativeCoordinates(_rulerPoints[0], canvasSize),
-            end: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
-            pixelSpacing: _pixelSpacingRow,
-          );
-          _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
-          _addToHistory(ActionType.rulerAdded, null);
-          print("Линейка: завершено измерение без Ctrl");
-          // Очищаем точки для следующего измерения
+        } else if (currentLength == 1) {
           _rulerPoints = [];
         } else {
-          // Если было больше 1 точки (неожиданно), начинаем заново
           _rulerPoints = [sceneOffset];
         }
       }
     });
+    
+    // Завершаем линию через микротаск для минимальной задержки
+    if (willCompleteLine && firstPoint != null) {
+      scheduleMicrotask(() {
+        final canvasSize = _getCanvasSize();
+        final completedLine = RulerLine(
+          start: _sceneToRelativeCoordinates(firstPoint, canvasSize),
+          end: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
+          pixelSpacing: _pixelSpacingRow,
+        );
+        setState(() {
+          _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
+          _addToHistory(ActionType.rulerAdded, null);
+        });
+      });
+    }
   }
 
   void _handleDoubleTap() {
@@ -2331,7 +2403,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, localPosition);
     
     // Проверяем drag handles
-    if (_selectedRulerIndex != null && _isPointOnRulerDragHandle(sceneOffset, _selectedRulerIndex!)) {
+    if (_selectedRulerIndex != null && 
+        _selectedRulerIndex! >= 0 && 
+        _selectedRulerIndex! < _completedRulerLines.length &&
+        _isPointOnRulerDragHandle(sceneOffset, _selectedRulerIndex!)) {
       return true;
     }
     if (_selectedAngleIndex != null && _isPointOnAngleDragHandle(sceneOffset, _selectedAngleIndex!)) {
@@ -2394,7 +2469,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
       
       // Проверяем индикатор перетаскивания линейки
-      if (_selectedRulerIndex != null && _isPointOnRulerDragHandle(sceneOffset, _selectedRulerIndex!)) {
+      if (_selectedRulerIndex != null && 
+          _selectedRulerIndex! >= 0 && 
+          _selectedRulerIndex! < _completedRulerLines.length &&
+          _isPointOnRulerDragHandle(sceneOffset, _selectedRulerIndex!)) {
         setState(() {
           _isDraggingRuler = true;
           _dragOffset = sceneOffset;
@@ -2420,7 +2498,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
       // Сначала проверяем перетаскивание линеек (даже если не выбраны)
       // Если линейка уже выбрана, проверяем её
-      if (_selectedRulerIndex != null) {
+      if (_selectedRulerIndex != null && 
+          _selectedRulerIndex! >= 0 && 
+          _selectedRulerIndex! < _completedRulerLines.length) {
         final canvasSize = _getCanvasSize();
         final line = _completedRulerLines[_selectedRulerIndex!];
         final absStart = line.getAbsoluteStart(canvasSize);
@@ -2523,7 +2603,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     
     // Проверяем перетаскивание линеек (старая логика для обратной совместимости)
-    if (_currentTool == ToolMode.ruler && _selectedRulerIndex != null && _rulerPoints.isEmpty) {
+    if (_currentTool == ToolMode.ruler && 
+        _selectedRulerIndex != null && 
+        _selectedRulerIndex! >= 0 && 
+        _selectedRulerIndex! < _completedRulerLines.length &&
+        _rulerPoints.isEmpty) {
       final canvasSize = _getCanvasSize();
       final line = _completedRulerLines[_selectedRulerIndex!];
       final absStart = line.getAbsoluteStart(canvasSize);
@@ -2577,7 +2661,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
     
     // Обрабатываем перетаскивание линеек
-    if (_isDraggingRuler && _selectedRulerIndex != null && _dragOffset != null) {
+    if (_isDraggingRuler && 
+        _selectedRulerIndex != null && 
+        _selectedRulerIndex! >= 0 && 
+        _selectedRulerIndex! < _completedRulerLines.length &&
+        _dragOffset != null) {
       final canvasSize = _getCanvasSize();
       // Преобразуем delta из scene coordinates в относительные координаты
       final deltaScene = sceneOffset - _dragOffset!;
@@ -3889,7 +3977,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
                                                     
                                                     // Проверяем и начинаем перетаскивание линеек
-                                                    if (_selectedRulerIndex != null && _isPointOnRulerDragHandle(sceneOffset, _selectedRulerIndex!)) {
+                                                    if (_selectedRulerIndex != null && 
+                                                        _selectedRulerIndex! >= 0 && 
+                                                        _selectedRulerIndex! < _completedRulerLines.length &&
+                                                        _isPointOnRulerDragHandle(sceneOffset, _selectedRulerIndex!)) {
                                                       setState(() {
                                                         _isDraggingRuler = true;
                                                         _dragOffset = sceneOffset;
@@ -4055,7 +4146,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                   }
                                                   
                                                   // Обрабатываем перетаскивание напрямую через Listener
-                                                  if (_isDraggingRuler && _selectedRulerIndex != null && _dragOffset != null) {
+                                                  if (_isDraggingRuler && 
+                                                      _selectedRulerIndex != null && 
+                                                      _selectedRulerIndex! >= 0 && 
+                                                      _selectedRulerIndex! < _completedRulerLines.length &&
+                                                      _dragOffset != null) {
                                                     if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
                                                       _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
                                                       _matrixCacheValid = true;
