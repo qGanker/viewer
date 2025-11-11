@@ -20,7 +20,7 @@ import '../utils/keyboard_utils.dart';
 import '../widgets/windows_menu_bar.dart';
 
 // Перечисление для инструментов
-enum ToolMode { pan, ruler, angle, magnifier, rotate, brightness, invert, annotation }
+enum ToolMode { pan, ruler, angle, magnifier, rotate, brightness, invert, arrow, text }
 
 // Перечисление для типов действий
 enum ActionType { rulerAdded, angleAdded, textAdded, arrowAdded, brightnessChanged, inverted, rotated }
@@ -2339,8 +2339,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _handleTapUp(TapUpDetails details) {
-    if (_currentTool != ToolMode.annotation || _isDragging) return;
-    
     // Используем кэшированную матрицу для производительности
     if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
       _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
@@ -2348,64 +2346,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
     
-    // Если есть сохраненная позиция, создаем стрелку
-    if (_lastTapPosition != null) {
-      setState(() {
-        _arrowAnnotations.add(ArrowAnnotation(
-          start: _lastTapPosition!,
-          end: sceneOffset,
-        ));
-        _lastTapPosition = null;
-        // Добавляем в историю
-        _addToHistory(ActionType.arrowAdded, null);
-      });
-    } else {
-      // Сохраняем позицию для следующего клика (для создания стрелки)
-      // или показываем диалог для текста
-      _showAnnotationChoiceDialog(sceneOffset);
+    // Обрабатываем инструмент стрелки
+    if (_currentTool == ToolMode.arrow) {
+      if (_isDragging) return;
+      
+      // Если есть сохраненная позиция, создаем стрелку
+      if (_lastTapPosition != null) {
+        setState(() {
+          _arrowAnnotations.add(ArrowAnnotation(
+            start: _lastTapPosition!,
+            end: sceneOffset,
+          ));
+          _lastTapPosition = null;
+          // Добавляем в историю
+          _addToHistory(ActionType.arrowAdded, null);
+        });
+      } else {
+        // Сохраняем позицию для следующего клика (для создания стрелки)
+        _lastTapPosition = sceneOffset;
+      }
+      return;
+    }
+    
+    // Обрабатываем инструмент текста
+    if (_currentTool == ToolMode.text) {
+      if (_isDragging) return;
+      // Показываем диалог для ввода текста
+      _showTextInputDialog(sceneOffset);
+      return;
     }
   }
   
-  void _showAnnotationChoiceDialog(Offset position) {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Выберите тип аннотации'),
-          content: const Text('Что вы хотите добавить?'),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                _showTextInputDialog(position);
-              },
-              child: const Text('Текст'),
-            ),
-            TextButton(
-              onPressed: () {
-                setState(() {
-                  _lastTapPosition = position;
-                });
-                Navigator.of(context).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Кликните в конечную точку стрелки'),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
-              },
-              child: const Text('Стрелка (2 клика)'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Отмена'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   // Проверяет, есть ли измерение рядом с указателем (для раннего отключения pan)
   bool _checkMeasurementNearPointer(Offset localPosition) {
     if (_rulerPoints.isNotEmpty || _anglePoints.isNotEmpty || _arrowPoints.isNotEmpty) {
@@ -2671,13 +2642,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     }
     
-    if (_currentTool != ToolMode.annotation) return;
-    
-    setState(() {
-      _isDragging = true; // Устанавливаем флаг перетаскивания
-      _arrowPoints.clear(); // Очищаем предыдущие точки
-      _arrowPoints.add(sceneOffset); // Добавляем начальную точку
-    });
+    // Обрабатываем начало перетаскивания для инструмента стрелки
+    if (_currentTool == ToolMode.arrow) {
+      setState(() {
+        _isDragging = true; // Устанавливаем флаг перетаскивания
+        _arrowPoints.clear(); // Очищаем предыдущие точки
+        _arrowPoints.add(sceneOffset); // Добавляем начальную точку
+      });
+      return;
+    }
   }
 
   void _handlePanUpdate(DragUpdateDetails details) {
@@ -2787,20 +2760,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     
-    if (_currentTool != ToolMode.annotation) return;
-    
-    // Оптимизированное обновление без лишних setState
-    bool needsUpdate = false;
-    if (_arrowPoints.length == 1) {
-      _arrowPoints.add(sceneOffset);
-      needsUpdate = true;
-    } else if (_arrowPoints.length == 2) {
-      _arrowPoints[1] = sceneOffset;
-      needsUpdate = true;
-    }
-    
-    if (needsUpdate) {
-      setState(() {});
+    // Обрабатываем обновление перетаскивания для инструмента стрелки
+    if (_currentTool == ToolMode.arrow) {
+      // Оптимизированное обновление без лишних setState
+      bool needsUpdate = false;
+      if (_arrowPoints.length == 1) {
+        _arrowPoints.add(sceneOffset);
+        needsUpdate = true;
+      } else if (_arrowPoints.length == 2) {
+        _arrowPoints[1] = sceneOffset;
+        needsUpdate = true;
+      }
+      
+      if (needsUpdate) {
+        setState(() {});
+      }
+      return;
     }
   }
 
@@ -2828,7 +2803,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     
-    if (_currentTool != ToolMode.annotation || _arrowPoints.isEmpty) return;
+    // Обрабатываем завершение перетаскивания для инструмента стрелки
+    if (_currentTool != ToolMode.arrow || _arrowPoints.isEmpty) return;
     
     // Если у нас есть только одна точка, добавляем вторую в том же месте
     if (_arrowPoints.length == 1) {
@@ -3745,8 +3721,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           } else if (HotkeyService.isKeyForTool(keyString, 'annotation', ctrl: ctrlPressed, alt: altPressed, shift: shiftPressed)) {
             print('✓ ANNOTATION hotkey matched');
             toolChanged = true;
-            toolName = 'Аннотации';
-            _switchTool(ToolMode.annotation);
+            toolName = 'Стрелка';
+            _switchTool(ToolMode.arrow);
+          } else if (HotkeyService.isKeyForTool(keyString, 'text', ctrl: ctrlPressed, alt: altPressed, shift: shiftPressed)) {
+            print('✓ TEXT hotkey matched');
+            toolChanged = true;
+            toolName = 'Текст';
+            _switchTool(ToolMode.text);
           } else if (HotkeyService.isKeyForTool(keyString, 'undo', ctrl: ctrlPressed, alt: altPressed, shift: shiftPressed)) {
             print('✓ UNDO hotkey matched');
             _undoLastAction();
@@ -3852,12 +3833,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   )
                 : _imageBytes != null
                     ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           // Панель инструментов
                           Container(
-                            width: 60, color: Colors.grey[900], padding: const EdgeInsets.symmetric(vertical: 20),
-                            child: Column(
-                              children: [
+                            width: 60, 
+                            color: Colors.grey[900],
+                            child: SingleChildScrollView(
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 20),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
                                 IconButton(
                                   icon: const Icon(Icons.pan_tool), 
                                   color: _currentTool == ToolMode.pan ? Colors.lightBlueAccent : Colors.white, 
@@ -3918,9 +3905,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 ),
                                 const SizedBox(height: 15),
                                 IconButton(
-                                  icon: const Icon(Icons.edit), 
-                                  color: _currentTool == ToolMode.annotation ? Colors.lightBlueAccent : Colors.white, 
-                                  onPressed: () => _switchTool(ToolMode.annotation)
+                                  icon: const Icon(Icons.arrow_forward), 
+                                  color: _currentTool == ToolMode.arrow ? Colors.lightBlueAccent : Colors.white, 
+                                  tooltip: 'Стрелка',
+                                  onPressed: () => _switchTool(ToolMode.arrow)
+                                ),
+                                const SizedBox(height: 15),
+                                IconButton(
+                                  icon: const Icon(Icons.text_fields), 
+                                  color: _currentTool == ToolMode.text ? Colors.lightBlueAccent : Colors.white, 
+                                  tooltip: 'Текст',
+                                  onPressed: () => _switchTool(ToolMode.text)
                                 ),
                                 const SizedBox(height: 15),
                                 // Кнопка отмены
@@ -3967,7 +3962,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     print("Сброс завершен: яркость=$_brightness, W/L=$_windowCenter/$_windowWidth");
                                   },
                                 ),
-                              ],
+                                  ],
+                                ),
+                              ),
                             ),
                           ),
                           // Область просмотра
@@ -3977,9 +3974,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 Padding(
                                   padding: const EdgeInsets.all(8.0),
                                   child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Text("W/L: ${_windowCenter?.round()}/${_windowWidth?.round()} | ${(_pixelSpacingRow * 100).toStringAsFixed(1)}% ${_isInverted ? '| Инвертировано' : ''} ${_rotationAngle != 0.0 ? '| Поворот: ${_rotationAngle.round()}°' : ''}${_currentTool == ToolMode.brightness ? ' | Яркость: ${_brightness.toStringAsFixed(1)} | Контраст: ${_contrast.toStringAsFixed(1)}' : ''}",
-                                          style: const TextStyle(color: Colors.white, fontSize: 16)),
+                                      Text(
+                                        "W/L: ${_windowCenter?.round()}/${_windowWidth?.round()} | ${(_pixelSpacingRow * 100).toStringAsFixed(1)}% ${_isInverted ? '| Инвертировано' : ''} ${_rotationAngle != 0.0 ? '| Поворот: ${_rotationAngle.round()}°' : ''}${_currentTool == ToolMode.brightness ? ' | Ярк: ${_brightness.toStringAsFixed(1)} | Контр: ${_contrast.toStringAsFixed(1)}' : ''}",
+                                        style: const TextStyle(color: Colors.white, fontSize: 16),
+                                        overflow: TextOverflow.ellipsis,
+                                        maxLines: 2,
+                                        softWrap: true,
+                                      ),
                                       if (_currentTool == ToolMode.brightness) ...[
                                         const SizedBox(height: 5),
                                         const Text("Зажмите ЛКМ и двигайте: ↔ контраст, ↕ яркость", 
