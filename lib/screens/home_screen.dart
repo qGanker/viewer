@@ -898,17 +898,70 @@ class AnglePainter extends CustomPainter {
     }
   }
   
+  // Находит ближайшие точки между двумя отрезками
+  // Возвращает пару точек: (точка на первом отрезке, точка на втором отрезке)
+  List<Offset> _findClosestPointsBetweenLines(Offset line1Start, Offset line1End, Offset line2Start, Offset line2End) {
+    // Параметрическое представление линий: P1(t) = line1Start + t * (line1End - line1Start)
+    // P2(s) = line2Start + s * (line2End - line2Start)
+    
+    final d1 = line1End - line1Start; // Направление первой линии
+    final d2 = line2End - line2Start; // Направление второй линии
+    final w = line1Start - line2Start; // Вектор от начала второй линии к началу первой
+    
+    final a = d1.dx * d1.dx + d1.dy * d1.dy; // ||d1||^2
+    final b = d1.dx * d2.dx + d1.dy * d2.dy; // d1 · d2
+    final c = d2.dx * d2.dx + d2.dy * d2.dy; // ||d2||^2
+    final d = d1.dx * w.dx + d1.dy * w.dy;   // d1 · w
+    final e = d2.dx * w.dx + d2.dy * w.dy;   // d2 · w
+    
+    double t, s;
+    
+    if (a < 0.0001 && c < 0.0001) {
+      // Обе линии вырождены в точки
+      return [line1Start, line2Start];
+    } else if (a < 0.0001) {
+      // Первая линия вырождена в точку
+      t = 0.0;
+      s = (e / c).clamp(0.0, 1.0);
+    } else if (c < 0.0001) {
+      // Вторая линия вырождена в точку
+      t = (d / a).clamp(0.0, 1.0);
+      s = 0.0;
+    } else {
+      // Обе линии нормальные
+      final denom = a * c - b * b;
+      if (denom.abs() < 0.0001) {
+        // Линии параллельны
+        t = (d / a).clamp(0.0, 1.0);
+        s = 0.0;
+      } else {
+        t = ((b * e - c * d) / denom).clamp(0.0, 1.0);
+        s = ((a * e - b * d) / denom).clamp(0.0, 1.0);
+      }
+    }
+    
+    final point1 = Offset(line1Start.dx + t * d1.dx, line1Start.dy + t * d1.dy);
+    final point2 = Offset(line2Start.dx + s * d2.dx, line2Start.dy + s * d2.dy);
+    
+    return [point1, point2];
+  }
+  
   void _drawCobbAngle(Canvas canvas, Offset line1Start, Offset line1End, Offset line2Start, Offset line2End, Paint paint, Paint fillPaint, int angleNumber, double angleDegrees, bool isSelected) {
     // Рисуем две линии
     canvas.drawLine(line1Start, line1End, paint..strokeWidth = 2.0);
     canvas.drawLine(line2Start, line2End, paint..strokeWidth = 2.0);
     
-    // Рисуем пунктирную линию между концами (line1End и line2End)
+    // Находим ближайшие точки между двумя линиями
+    final closestPoints = _findClosestPointsBetweenLines(line1Start, line1End, line2Start, line2End);
+    final closestPoint1 = closestPoints[0];
+    final closestPoint2 = closestPoints[1];
+    
+    // Рисуем пунктирную линию между ближайшими точками
     final dashedPaint = Paint()
       ..color = paint.color.withOpacity(0.5)
       ..strokeWidth = 1.0
       ..style = PaintingStyle.stroke;
-    _drawDashedLine(canvas, line1End, line2End, dashedPaint);
+    _drawDashedLine(canvas, closestPoint1, closestPoint2, dashedPaint);
     
     // Рисуем конечные точки линий
     canvas.drawCircle(line1Start, 4, fillPaint);
