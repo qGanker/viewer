@@ -2687,28 +2687,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
     
-    // Обрабатываем инструмент стрелки
-    if (_currentTool == ToolMode.arrow) {
-      if (_isDragging) return;
-      
-      // Если есть сохраненная позиция, создаем стрелку
-      if (_lastTapPosition != null) {
-        setState(() {
-          _arrowAnnotations.add(ArrowAnnotation(
-            start: _lastTapPosition!,
-            end: sceneOffset,
-          ));
-          _lastTapPosition = null;
-          // Добавляем в историю
-          _addToHistory(ActionType.arrowAdded, null);
-        });
-      } else {
-        // Сохраняем позицию для следующего клика (для создания стрелки)
-        _lastTapPosition = sceneOffset;
-      }
-      return;
-    }
-    
     // Обрабатываем инструмент текста
     if (_currentTool == ToolMode.text) {
       if (_isDragging) return;
@@ -2720,6 +2698,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   
   // Проверяет, есть ли измерение рядом с указателем (для раннего отключения pan)
   bool _checkMeasurementNearPointer(Offset localPosition) {
+    // Если активен инструмент стрелки, не блокируем pan - позволяем создавать новую стрелку
+    if (_currentTool == ToolMode.arrow) {
+      return false;
+    }
+    
     if (_rulerPoints.isNotEmpty || _anglePoints.isNotEmpty || _arrowPoints.isNotEmpty) {
       return false; // Если создаются новые измерения, не блокируем pan
     }
@@ -2767,6 +2750,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _handlePanStart(DragStartDetails details) {
+    print("=== PAN START вызван, _currentTool = $_currentTool");
     // Используем кэшированную матрицу для производительности
     if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
       _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
@@ -2783,6 +2767,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // Сохраняем предыдущее значение в историю только при начале перетаскивания
         _addToHistory(ActionType.brightnessChanged, _brightness);
       });
+      return;
+    }
+    
+    // ПРИОРИТЕТ 0.5: Обрабатываем начало создания стрелки (высокий приоритет)
+    if (_currentTool == ToolMode.arrow) {
+      print("=== ARROW PAN START: начало создания стрелки в точке $sceneOffset");
+      setState(() {
+        _isDragging = true; // Устанавливаем флаг перетаскивания
+        _arrowPoints.clear(); // Очищаем предыдущие точки
+        _arrowPoints.add(sceneOffset); // Добавляем начальную точку
+      });
+      print("=== ARROW PAN START: _arrowPoints = $_arrowPoints, _isDragging = $_isDragging");
       return;
     }
     
@@ -2982,16 +2978,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return;
       }
     }
-    
-    // Обрабатываем начало перетаскивания для инструмента стрелки
-    if (_currentTool == ToolMode.arrow) {
-      setState(() {
-        _isDragging = true; // Устанавливаем флаг перетаскивания
-        _arrowPoints.clear(); // Очищаем предыдущие точки
-        _arrowPoints.add(sceneOffset); // Добавляем начальную точку
-      });
-      return;
-    }
   }
 
   void _handlePanUpdate(DragUpdateDetails details) {
@@ -3121,16 +3107,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     
-    // Обрабатываем обновление перетаскивания для инструмента стрелки
-    if (_currentTool == ToolMode.arrow) {
+    // Обрабатываем обновление перетаскивания для инструмента стрелки (создание новой стрелки)
+    if (_currentTool == ToolMode.arrow && _arrowPoints.isNotEmpty) {
+      print("=== ARROW PAN UPDATE: обновление стрелки, sceneOffset = $sceneOffset");
       // Оптимизированное обновление без лишних setState
       bool needsUpdate = false;
       if (_arrowPoints.length == 1) {
         _arrowPoints.add(sceneOffset);
         needsUpdate = true;
+        print("=== ARROW PAN UPDATE: добавлена вторая точка");
       } else if (_arrowPoints.length == 2) {
         _arrowPoints[1] = sceneOffset;
         needsUpdate = true;
+        print("=== ARROW PAN UPDATE: обновлена вторая точка");
       }
       
       if (needsUpdate) {
@@ -3141,7 +3130,50 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _handlePanEnd(DragEndDetails details) {
-    // Сбрасываем флаги перетаскивания линеек, углов, текстовых аннотаций и стрелок
+    // ПРИОРИТЕТ 0: Обрабатываем завершение создания стрелки (высший приоритет)
+    if (_currentTool == ToolMode.arrow && _arrowPoints.isNotEmpty) {
+      print("=== ARROW PAN END: завершение создания стрелки, _arrowPoints = $_arrowPoints");
+      // Если у нас есть только одна точка, добавляем вторую в том же месте
+      if (_arrowPoints.length == 1) {
+        _arrowPoints.add(_arrowPoints[0]);
+      }
+      
+      // Создаем стрелку только если пользователь действительно потянул мышь
+      if (_arrowPoints.length >= 2) {
+        final start = _arrowPoints[0];
+        final end = _arrowPoints[1];
+        
+        // Вычисляем расстояние между точками
+        final distance = (end - start).distance;
+        print("=== ARROW PAN END: расстояние = $distance");
+        
+        // Создаем стрелку только если расстояние больше минимального порога (5 пикселей)
+        if (distance > 5.0) {
+          setState(() {
+            _arrowAnnotations.add(ArrowAnnotation(
+              start: start,
+              end: end,
+            ));
+            _arrowPoints.clear();
+            _isDragging = false; // Сбрасываем флаг перетаскивания
+            // Добавляем в историю
+            _addToHistory(ActionType.arrowAdded, null);
+          });
+          
+          print("=== ARROW PAN END: Стрелка создана: ${start} -> ${end}");
+        } else {
+          // Если расстояние слишком маленькое, просто очищаем точки
+          print("=== ARROW PAN END: расстояние слишком маленькое, стрелка не создана");
+          setState(() {
+            _arrowPoints.clear();
+            _isDragging = false;
+          });
+        }
+      }
+      return;
+    }
+    
+    // ПРИОРИТЕТ 1: Сбрасываем флаги перетаскивания линеек, углов, текстовых аннотаций и стрелок
     if (_isDraggingRuler || _isDraggingAngle || _isDraggingText || _isDraggingArrow) {
       setState(() {
         _isDraggingRuler = false;
@@ -3154,7 +3186,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     
-    // Сбрасываем переменные перетаскивания яркости/контраста
+    // ПРИОРИТЕТ 2: Сбрасываем переменные перетаскивания яркости/контраста
     if (_currentTool == ToolMode.brightness && _brightnessDragStart != null) {
       setState(() {
         _brightnessDragStart = null;
@@ -3162,33 +3194,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _contrastAtDragStart = null;
       });
       return;
-    }
-    
-    // Обрабатываем завершение перетаскивания для инструмента стрелки
-    if (_currentTool != ToolMode.arrow || _arrowPoints.isEmpty) return;
-    
-    // Если у нас есть только одна точка, добавляем вторую в том же месте
-    if (_arrowPoints.length == 1) {
-      _arrowPoints.add(_arrowPoints[0]);
-    }
-    
-    // Создаем стрелку только если у нас есть хотя бы одна точка
-    if (_arrowPoints.length >= 1) {
-      final start = _arrowPoints[0];
-      final end = _arrowPoints.length > 1 ? _arrowPoints[1] : _arrowPoints[0];
-      
-      setState(() {
-        _arrowAnnotations.add(ArrowAnnotation(
-          start: start,
-          end: end,
-        ));
-        _arrowPoints.clear();
-        _isDragging = false; // Сбрасываем флаг перетаскивания
-        // Добавляем в историю
-        _addToHistory(ActionType.arrowAdded, null);
-      });
-      
-      print("Стрелка создана: ${start} -> ${end}");
     }
   }
 
@@ -4426,6 +4431,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                 // Ранний перехват для проверки измерений и блокировки pan
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerDown(event);
+                                                } else if (_currentTool == ToolMode.arrow && event.buttons == 1) {
+                                                  // Обрабатываем начало создания стрелки (ЛКМ)
+                                                  if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                    _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                    _matrixCacheValid = true;
+                                                  }
+                                                  final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                  print("=== ARROW POINTER DOWN: начало создания стрелки в точке $sceneOffset");
+                                                  setState(() {
+                                                    _isDragging = true;
+                                                    _arrowPoints.clear();
+                                                    _arrowPoints.add(sceneOffset);
+                                                  });
                                                 } else if (_currentTool == ToolMode.brightness && event.buttons == 1) {
                                                   // Обрабатываем начало перетаскивания для инструмента яркости (ЛКМ)
                                                   setState(() {
@@ -4601,6 +4619,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               onPointerUp: (PointerUpEvent event) {
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerUp(event);
+                                                } else if (_currentTool == ToolMode.arrow && _arrowPoints.isNotEmpty) {
+                                                  // Завершаем создание стрелки
+                                                  print("=== ARROW POINTER UP: завершение создания стрелки");
+                                                  if (_arrowPoints.length == 1) {
+                                                    _arrowPoints.add(_arrowPoints[0]);
+                                                  }
+                                                  
+                                                  if (_arrowPoints.length >= 2) {
+                                                    final start = _arrowPoints[0];
+                                                    final end = _arrowPoints[1];
+                                                    final distance = (end - start).distance;
+                                                    print("=== ARROW POINTER UP: расстояние = $distance");
+                                                    
+                                                    if (distance > 5.0) {
+                                                      setState(() {
+                                                        _arrowAnnotations.add(ArrowAnnotation(
+                                                          start: start,
+                                                          end: end,
+                                                        ));
+                                                        _arrowPoints.clear();
+                                                        _isDragging = false;
+                                                        _addToHistory(ActionType.arrowAdded, null);
+                                                      });
+                                                      print("=== ARROW POINTER UP: Стрелка создана!");
+                                                    } else {
+                                                      print("=== ARROW POINTER UP: расстояние слишком маленькое");
+                                                      setState(() {
+                                                        _arrowPoints.clear();
+                                                        _isDragging = false;
+                                                      });
+                                                    }
+                                                  }
                                                 } else if (_currentTool == ToolMode.brightness && _brightnessDragStart != null) {
                                                   // Завершаем перетаскивание яркости/контраста
                                                   setState(() {
@@ -4628,6 +4678,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               onPointerMove: (PointerMoveEvent event) {
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerMove(event);
+                                                } else if (_currentTool == ToolMode.arrow && _arrowPoints.isNotEmpty) {
+                                                  // Обновляем позицию конца стрелки
+                                                  if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                    _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                    _matrixCacheValid = true;
+                                                  }
+                                                  final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                  setState(() {
+                                                    if (_arrowPoints.length == 1) {
+                                                      _arrowPoints.add(sceneOffset);
+                                                    } else if (_arrowPoints.length == 2) {
+                                                      _arrowPoints[1] = sceneOffset;
+                                                    }
+                                                  });
                                                 } else if (_currentTool == ToolMode.brightness && 
                                                     _brightnessDragStart != null && 
                                                     _brightnessAtDragStart != null && 
