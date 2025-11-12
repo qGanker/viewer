@@ -472,7 +472,18 @@ class RulerPainter extends CustomPainter {
         
         // Рисуем линию и измерения
         if (currentPoints.length > 1) {
-          _drawRulerLine(canvas, currentPoints[0], currentPoints[1], safePixelSpacing, paint, fillPaint, completedLines.length + 1, false, null, size);
+          // Используем тот же размер для вычислений, что и для завершенных линий
+          final distanceSize = imageSize ?? size;
+          
+          // currentPoints находятся в scene coordinates (размер canvas на экране)
+          // Для правильного вычисления расстояния преобразуем их в координаты изображения
+          final scaleX = distanceSize.width / size.width;
+          final scaleY = distanceSize.height / size.height;
+          final scaledStart = Offset(currentPoints[0].dx * scaleX, currentPoints[0].dy * scaleY);
+          final scaledEnd = Offset(currentPoints[1].dx * scaleX, currentPoints[1].dy * scaleY);
+          
+          // Отрисовываем в scene coordinates, но передаем масштабированные точки для вычисления расстояния
+          _drawRulerLine(canvas, currentPoints[0], currentPoints[1], safePixelSpacing, paint, fillPaint, completedLines.length + 1, false, null, distanceSize, scaledStart, scaledEnd);
         }
       }
       
@@ -486,7 +497,7 @@ class RulerPainter extends CustomPainter {
     }
   }
   
-  void _drawRulerLine(Canvas canvas, Offset start, Offset end, double safePixelSpacing, Paint paint, Paint fillPaint, int lineNumber, bool isSelected, RulerLine? line, Size size) {
+  void _drawRulerLine(Canvas canvas, Offset start, Offset end, double safePixelSpacing, Paint paint, Paint fillPaint, int lineNumber, bool isSelected, RulerLine? line, Size size, [Offset? scaledStart, Offset? scaledEnd]) {
     // Основная линия (тонкая)
     canvas.drawLine(start, end, paint);
     
@@ -514,7 +525,13 @@ class RulerPainter extends CustomPainter {
     }
     
     // Вычисляем расстояние
-    final pixelDistance = line != null ? line.getDistance(size) : (end - start).distance;
+    // Для завершенных линий (line != null): используем сохраненные относительные координаты
+    // Для текущих точек (line == null): используем масштабированные координаты если переданы
+    final pixelDistance = line != null 
+        ? line.getDistance(size) 
+        : (scaledStart != null && scaledEnd != null)
+            ? (scaledEnd - scaledStart).distance
+            : (end - start).distance;
     final realDistanceMm = pixelDistance * safePixelSpacing;
     
     // Рисуем текст с расстоянием и номером линии
@@ -2698,8 +2715,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   
   // Проверяет, есть ли измерение рядом с указателем (для раннего отключения pan)
   bool _checkMeasurementNearPointer(Offset localPosition) {
-    // Если активен инструмент стрелки, не блокируем pan - позволяем создавать новую стрелку
-    if (_currentTool == ToolMode.arrow) {
+    // Если активен инструмент линейки или стрелки, не блокируем pan - позволяем создавать новые элементы
+    if (_currentTool == ToolMode.ruler || _currentTool == ToolMode.arrow) {
       return false;
     }
     
@@ -4431,6 +4448,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                 // Ранний перехват для проверки измерений и блокировки pan
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerDown(event);
+                                                } else if (_currentTool == ToolMode.ruler && event.buttons == 1) {
+                                                  // Обрабатываем начало создания линейки (ЛКМ)
+                                                  if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                    _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                    _matrixCacheValid = true;
+                                                  }
+                                                  final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                  print("=== RULER POINTER DOWN: начало создания линейки в точке $sceneOffset");
+                                                  
+                                                  // Проверяем Ctrl для режима множественных линеек
+                                                  final bool ctrlPressed = RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlLeft) ||
+                                                                          RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlRight);
+                                                  
+                                                  setState(() {
+                                                    _isDragging = true;
+                                                    // Если не зажат Ctrl и есть завершенные линии, очищаем их
+                                                    if (!ctrlPressed && _completedRulerLines.isNotEmpty) {
+                                                      _completedRulerLines.clear();
+                                                    }
+                                                    _rulerPoints.clear();
+                                                    _rulerPoints.add(sceneOffset);
+                                                  });
                                                 } else if (_currentTool == ToolMode.arrow && event.buttons == 1) {
                                                   // Обрабатываем начало создания стрелки (ЛКМ)
                                                   if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
@@ -4619,6 +4658,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               onPointerUp: (PointerUpEvent event) {
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerUp(event);
+                                                } else if (_currentTool == ToolMode.ruler && _rulerPoints.isNotEmpty) {
+                                                  // Завершаем создание линейки
+                                                  print("=== RULER POINTER UP: завершение создания линейки");
+                                                  if (_rulerPoints.length == 1) {
+                                                    _rulerPoints.add(_rulerPoints[0]);
+                                                  }
+                                                  
+                                                  if (_rulerPoints.length >= 2) {
+                                                    final start = _rulerPoints[0];
+                                                    final end = _rulerPoints[1];
+                                                    final distance = (end - start).distance;
+                                                    print("=== RULER POINTER UP: расстояние = $distance");
+                                                    
+                                                    if (distance > 5.0) {
+                                                      final canvasSize = _getCanvasSize();
+                                                      final completedLine = RulerLine(
+                                                        start: _sceneToRelativeCoordinates(start, canvasSize),
+                                                        end: _sceneToRelativeCoordinates(end, canvasSize),
+                                                        pixelSpacing: _pixelSpacingRow,
+                                                      );
+                                                      setState(() {
+                                                        _completedRulerLines = List.of(_completedRulerLines)..add(completedLine);
+                                                        _rulerPoints.clear();
+                                                        _isDragging = false;
+                                                        _addToHistory(ActionType.rulerAdded, null);
+                                                      });
+                                                      print("=== RULER POINTER UP: Линейка создана!");
+                                                    } else {
+                                                      print("=== RULER POINTER UP: расстояние слишком маленькое");
+                                                      setState(() {
+                                                        _rulerPoints.clear();
+                                                        _isDragging = false;
+                                                      });
+                                                    }
+                                                  }
                                                 } else if (_currentTool == ToolMode.arrow && _arrowPoints.isNotEmpty) {
                                                   // Завершаем создание стрелки
                                                   print("=== ARROW POINTER UP: завершение создания стрелки");
@@ -4678,6 +4752,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               onPointerMove: (PointerMoveEvent event) {
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerMove(event);
+                                                } else if (_currentTool == ToolMode.ruler && _rulerPoints.isNotEmpty) {
+                                                  // Обновляем позицию конца линейки
+                                                  if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                    _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                    _matrixCacheValid = true;
+                                                  }
+                                                  final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                  setState(() {
+                                                    if (_rulerPoints.length == 1) {
+                                                      _rulerPoints.add(sceneOffset);
+                                                    } else if (_rulerPoints.length == 2) {
+                                                      _rulerPoints[1] = sceneOffset;
+                                                    }
+                                                  });
                                                 } else if (_currentTool == ToolMode.arrow && _arrowPoints.isNotEmpty) {
                                                   // Обновляем позицию конца стрелки
                                                   if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
