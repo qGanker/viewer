@@ -2399,16 +2399,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     
     // Режим калибровки теперь работает через drag в Listener (onPointerDown/Move/Up)
-    // Эта секция больше не используется
     if (_isCalibrationMode) {
       // Калибровка обрабатывается в Listener
       return;
     }
     
-    // Обрабатываем линейку - максимально быстро
-    _handleRulerTap(sceneOffset);
-    
-    // Проверки на существующие элементы только если не создаем новые
+    // Линейка теперь работает через drag в Listener (onPointerDown/Move/Up)
+    // Старая логика через клики полностью отключена
+    // Просто проверяем существующие элементы, если не создаем новые
     if (_rulerPoints.isEmpty) {
       scheduleMicrotask(() {
         _handleTapOnExistingMeasurements(sceneOffset);
