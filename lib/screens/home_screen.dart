@@ -2349,10 +2349,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     }
     
-    // Обрабатываем клик для инструмента угла (максимально быстро)
-    if (_currentTool == ToolMode.angle) {
+    // Обрабатываем клик для инструмента угла (только для обычных углов)
+    if (_currentTool == ToolMode.angle && _currentAngleType == AngleType.normal) {
       final int currentLength = _anglePoints.length;
-      final int requiredPoints = _currentAngleType == AngleType.normal ? 3 : 4;
+      final int requiredPoints = 3; // Обычный угол требует 3 точки
       final bool willComplete = currentLength == requiredPoints - 1;
       final List<Offset> pointsToComplete = willComplete ? List.from(_anglePoints) : [];
       
@@ -2369,27 +2369,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (willComplete) {
         scheduleMicrotask(() {
           final canvasSize = _getCanvasSize();
-          AngleMeasurement completedAngle;
-          
-          if (_currentAngleType == AngleType.normal) {
-            // Обычный угол: 3 точки (точка1, вершина, точка2)
-            completedAngle = AngleMeasurement(
-              vertex: _sceneToRelativeCoordinates(pointsToComplete[1], canvasSize),
-              point1: _sceneToRelativeCoordinates(pointsToComplete[0], canvasSize),
-              point2: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
-              type: AngleType.normal,
-            );
-          } else {
-            // Угол Кобба: 4 точки (начало линии1, конец линии1, начало линии2, конец линии2)
-            completedAngle = AngleMeasurement(
-              vertex: Offset.zero, // Не используется для угла Кобба
-              point1: _sceneToRelativeCoordinates(pointsToComplete[0], canvasSize),
-              point2: _sceneToRelativeCoordinates(pointsToComplete[2], canvasSize),
-              type: AngleType.cobb,
-              line1End: _sceneToRelativeCoordinates(pointsToComplete[1], canvasSize),
-              line2End: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
-            );
-          }
+          // Обычный угол: 3 точки (точка1, вершина, точка2)
+          final completedAngle = AngleMeasurement(
+            vertex: _sceneToRelativeCoordinates(pointsToComplete[1], canvasSize),
+            point1: _sceneToRelativeCoordinates(pointsToComplete[0], canvasSize),
+            point2: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
+            type: AngleType.normal,
+          );
           
           setState(() {
             _completedAngles = List.of(_completedAngles)..add(completedAngle);
@@ -2715,8 +2701,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   
   // Проверяет, есть ли измерение рядом с указателем (для раннего отключения pan)
   bool _checkMeasurementNearPointer(Offset localPosition) {
-    // Если активен инструмент линейки или стрелки, не блокируем pan - позволяем создавать новые элементы
-    if (_currentTool == ToolMode.ruler || _currentTool == ToolMode.arrow) {
+    // Если активен инструмент линейки, угла или стрелки, не блокируем pan - позволяем создавать новые элементы
+    if (_currentTool == ToolMode.ruler || _currentTool == ToolMode.arrow || 
+        (_currentTool == ToolMode.angle && _currentAngleType == AngleType.cobb)) {
       return false;
     }
     
@@ -4448,6 +4435,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                 // Ранний перехват для проверки измерений и блокировки pan
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerDown(event);
+                                                } else if (_currentTool == ToolMode.angle && event.buttons == 1) {
+                                                  // Обрабатываем начало создания угла (ЛКМ)
+                                                  if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                    _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                    _matrixCacheValid = true;
+                                                  }
+                                                  final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                  
+                                                  if (_currentAngleType == AngleType.cobb) {
+                                                    // Для угла Кобба: если нет точек - начинаем первую линию, если 2 точки - начинаем вторую линию
+                                                    if (_anglePoints.isEmpty) {
+                                                      print("=== ANGLE COBB POINTER DOWN: начало первой линии угла Кобба");
+                                                      setState(() {
+                                                        _isDragging = true;
+                                                        _anglePoints.add(sceneOffset);
+                                                      });
+                                                    } else if (_anglePoints.length == 2) {
+                                                      print("=== ANGLE COBB POINTER DOWN: начало второй линии угла Кобба");
+                                                      setState(() {
+                                                        _isDragging = true;
+                                                        _anglePoints.add(sceneOffset);
+                                                      });
+                                                    }
+                                                  } else {
+                                                    // Обычный угол - оставляем на кликах
+                                                  }
                                                 } else if (_currentTool == ToolMode.ruler && event.buttons == 1) {
                                                   // Обрабатываем начало создания линейки (ЛКМ)
                                                   if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
@@ -4658,6 +4671,70 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               onPointerUp: (PointerUpEvent event) {
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerUp(event);
+                                                } else if (_currentTool == ToolMode.angle && _currentAngleType == AngleType.cobb && _anglePoints.isNotEmpty) {
+                                                  // Завершаем линию угла Кобба
+                                                  print("=== ANGLE COBB POINTER UP: завершение линии, текущие точки: ${_anglePoints.length}");
+                                                  
+                                                  if (_anglePoints.length == 1) {
+                                                    _anglePoints.add(_anglePoints[0]);
+                                                  }
+                                                  
+                                                  if (_anglePoints.length == 2) {
+                                                    // Завершили первую линию
+                                                    final start = _anglePoints[0];
+                                                    final end = _anglePoints[1];
+                                                    final distance = (end - start).distance;
+                                                    
+                                                    if (distance > 5.0) {
+                                                      print("=== ANGLE COBB POINTER UP: первая линия завершена");
+                                                      setState(() {
+                                                        _isDragging = false;
+                                                      });
+                                                    } else {
+                                                      print("=== ANGLE COBB POINTER UP: первая линия слишком короткая");
+                                                      setState(() {
+                                                        _anglePoints.clear();
+                                                        _isDragging = false;
+                                                      });
+                                                    }
+                                                  } else if (_anglePoints.length == 3) {
+                                                    _anglePoints.add(_anglePoints[2]);
+                                                  }
+                                                  
+                                                  if (_anglePoints.length == 4) {
+                                                    // Завершили вторую линию - создаем угол
+                                                    final line1Start = _anglePoints[0];
+                                                    final line1End = _anglePoints[1];
+                                                    final line2Start = _anglePoints[2];
+                                                    final line2End = _anglePoints[3];
+                                                    final distance2 = (line2End - line2Start).distance;
+                                                    
+                                                    if (distance2 > 5.0) {
+                                                      final canvasSize = _getCanvasSize();
+                                                      final completedAngle = AngleMeasurement(
+                                                        vertex: Offset.zero, // Не используется для угла Кобба
+                                                        point1: _sceneToRelativeCoordinates(line1Start, canvasSize),
+                                                        point2: _sceneToRelativeCoordinates(line2Start, canvasSize),
+                                                        type: AngleType.cobb,
+                                                        line1End: _sceneToRelativeCoordinates(line1End, canvasSize),
+                                                        line2End: _sceneToRelativeCoordinates(line2End, canvasSize),
+                                                      );
+                                                      setState(() {
+                                                        _completedAngles = List.of(_completedAngles)..add(completedAngle);
+                                                        _anglePoints.clear();
+                                                        _isDragging = false;
+                                                        _addToHistory(ActionType.angleAdded, null);
+                                                      });
+                                                      print("=== ANGLE COBB POINTER UP: Угол Кобба создан!");
+                                                    } else {
+                                                      print("=== ANGLE COBB POINTER UP: вторая линия слишком короткая");
+                                                      setState(() {
+                                                        // Оставляем первую линию, удаляем вторую
+                                                        _anglePoints.removeRange(2, _anglePoints.length);
+                                                        _isDragging = false;
+                                                      });
+                                                    }
+                                                  }
                                                 } else if (_currentTool == ToolMode.ruler && _rulerPoints.isNotEmpty) {
                                                   // Завершаем создание линейки
                                                   print("=== RULER POINTER UP: завершение создания линейки");
@@ -4752,6 +4829,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               onPointerMove: (PointerMoveEvent event) {
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerMove(event);
+                                                } else if (_currentTool == ToolMode.angle && _currentAngleType == AngleType.cobb && _anglePoints.isNotEmpty) {
+                                                  // Обновляем позицию для угла Кобба
+                                                  if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                    _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                    _matrixCacheValid = true;
+                                                  }
+                                                  final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                  setState(() {
+                                                    if (_anglePoints.length == 1) {
+                                                      // Рисуем первую линию
+                                                      _anglePoints.add(sceneOffset);
+                                                    } else if (_anglePoints.length == 2) {
+                                                      // Обновляем конец первой линии
+                                                      _anglePoints[1] = sceneOffset;
+                                                    } else if (_anglePoints.length == 3) {
+                                                      // Рисуем вторую линию
+                                                      _anglePoints.add(sceneOffset);
+                                                    } else if (_anglePoints.length == 4) {
+                                                      // Обновляем конец второй линии
+                                                      _anglePoints[3] = sceneOffset;
+                                                    }
+                                                  });
                                                 } else if (_currentTool == ToolMode.ruler && _rulerPoints.isNotEmpty) {
                                                   // Обновляем позицию конца линейки
                                                   if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
