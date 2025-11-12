@@ -22,6 +22,9 @@ import '../widgets/windows_menu_bar.dart';
 // Перечисление для инструментов
 enum ToolMode { pan, ruler, angle, magnifier, rotate, brightness, invert, arrow, text }
 
+// Перечисление для типов измерения углов
+enum AngleType { normal, cobb }
+
 // Перечисление для типов действий
 enum ActionType { rulerAdded, angleAdded, textAdded, arrowAdded, brightnessChanged, inverted, rotated }
 
@@ -308,11 +311,17 @@ class AngleMeasurement {
   final Offset vertex;  // Вершина угла (относительные координаты 0.0-1.0)
   final Offset point1;  // Первая точка на первом луче (относительные координаты 0.0-1.0)
   final Offset point2;  // Вторая точка на втором луче (относительные координаты 0.0-1.0)
+  final AngleType type; // Тип угла (обычный или Кобба)
+  final Offset? line1End; // Конечная точка первой линии (для угла Кобба)
+  final Offset? line2End; // Конечная точка второй линии (для угла Кобба)
   
   AngleMeasurement({
     required this.vertex,
     required this.point1,
     required this.point2,
+    this.type = AngleType.normal,
+    this.line1End,
+    this.line2End,
   });
   
   // Преобразует относительные координаты в абсолютные для заданного размера
@@ -328,8 +337,22 @@ class AngleMeasurement {
     return Offset(point2.dx * size.width, point2.dy * size.height);
   }
   
+  Offset? getAbsoluteLine1End(Size size) {
+    if (line1End == null) return null;
+    return Offset(line1End!.dx * size.width, line1End!.dy * size.height);
+  }
+  
+  Offset? getAbsoluteLine2End(Size size) {
+    if (line2End == null) return null;
+    return Offset(line2End!.dx * size.width, line2End!.dy * size.height);
+  }
+  
   // Вычисление угла в градусах для заданного размера
   double getAngleDegrees(Size size) {
+    if (type == AngleType.cobb) {
+      return _calculateCobbAngle(size);
+    }
+    
     final v = getAbsoluteVertex(size);
     final p1 = getAbsolutePoint1(size);
     final p2 = getAbsolutePoint2(size);
@@ -351,6 +374,37 @@ class AngleMeasurement {
     final angleRad = acos(clampedCos);
     
     return angleRad * 180 / pi;
+  }
+  
+  // Вычисление угла Кобба
+  // Угол Кобба измеряется между перпендикулярами к двум линиям
+  double _calculateCobbAngle(Size size) {
+    if (line1End == null || line2End == null) return 0.0;
+    
+    final l1Start = getAbsolutePoint1(size);
+    final l1End = getAbsoluteLine1End(size)!;
+    final l2Start = getAbsolutePoint2(size);
+    final l2End = getAbsoluteLine2End(size)!;
+    
+    // Направляющие векторы для двух линий
+    final v1 = l1End - l1Start;
+    final v2 = l2End - l2Start;
+    
+    // Нормализуем векторы
+    final mag1 = sqrt(v1.dx * v1.dx + v1.dy * v1.dy);
+    final mag2 = sqrt(v2.dx * v2.dx + v2.dy * v2.dy);
+    
+    if (mag1 == 0 || mag2 == 0) return 0.0;
+    
+    // Вычисляем угол между линиями
+    final dot = v1.dx * v2.dx + v1.dy * v2.dy;
+    final cosAngle = dot / (mag1 * mag2);
+    final clampedCos = cosAngle.clamp(-1.0, 1.0);
+    final angleRad = acos(clampedCos);
+    final angleDeg = angleRad * 180 / pi;
+    
+    // Угол Кобба - это меньший из двух углов (угол или 180 - угол)
+    return angleDeg > 90 ? 180 - angleDeg : angleDeg;
   }
 }
 
@@ -559,11 +613,12 @@ class RulerPainter extends CustomPainter {
 
 // Класс для рисования углов
 class AnglePainter extends CustomPainter {
-  final List<Offset> currentPoints; // Текущие точки для рисования (0-3 точки, в scene coordinates)
+  final List<Offset> currentPoints; // Текущие точки для рисования (0-3 точки для обычного угла, 0-4 для Кобба, в scene coordinates)
   final List<AngleMeasurement> completedAngles; // Завершенные измерения углов (в относительных координатах)
   final int? selectedIndex; // Индекс выбранного угла
   final Size? imageSize; // Размер исходного изображения для нормализации
   final double rotationAngle; // Угол поворота изображения в градусах
+  final AngleType currentAngleType; // Текущий тип угла для предварительного просмотра
   
   AnglePainter({
     required this.currentPoints,
@@ -571,6 +626,7 @@ class AnglePainter extends CustomPainter {
     this.selectedIndex,
     this.imageSize,
     this.rotationAngle = 0.0,
+    this.currentAngleType = AngleType.normal,
   });
   
   @override
@@ -599,10 +655,17 @@ class AnglePainter extends CustomPainter {
         final absVertex = angle.getAbsoluteVertex(size);
         final absPoint1 = angle.getAbsolutePoint1(size);
         final absPoint2 = angle.getAbsolutePoint2(size);
+        final absLine1End = angle.getAbsoluteLine1End(size);
+        final absLine2End = angle.getAbsoluteLine2End(size);
         // Для вычисления угла используем размер изображения, если он доступен
         final angleSize = imageSize ?? size;
         final angleDeg = angle.getAngleDegrees(angleSize);
-        _drawAngle(canvas, absVertex, absPoint1, absPoint2, paint, fillPaint, i + 1, angleDeg, isSelected);
+        
+        if (angle.type == AngleType.cobb && absLine1End != null && absLine2End != null) {
+          _drawCobbAngle(canvas, absPoint1, absLine1End, absPoint2, absLine2End, paint, fillPaint, i + 1, angleDeg, isSelected);
+        } else {
+          _drawAngle(canvas, absVertex, absPoint1, absPoint2, paint, fillPaint, i + 1, angleDeg, isSelected);
+        }
       }
       
       // Рисуем текущие точки и углы (если есть)
@@ -618,28 +681,61 @@ class AnglePainter extends CustomPainter {
         }
         
         // Рисуем предварительный просмотр угла
-        if (currentPoints.length == 2) {
-          // Рисуем линию от первой точки ко второй (вершине)
-          canvas.drawLine(currentPoints[0], currentPoints[1], paint);
-        } else if (currentPoints.length == 3) {
-          // Рисуем полный угол
-          final vertex = currentPoints[1]; // Вершина - вторая точка
-          final point1 = currentPoints[0]; // Первая точка на первом луче
-          final point2 = currentPoints[2]; // Третья точка на втором луче
-          
-          // Вычисляем угол для предварительного просмотра
-          final v1 = point1 - vertex;
-          final v2 = point2 - vertex;
-          final dot = v1.dx * v2.dx + v1.dy * v2.dy;
-          final mag1 = sqrt(v1.dx * v1.dx + v1.dy * v1.dy);
-          final mag2 = sqrt(v2.dx * v2.dx + v2.dy * v2.dy);
-          double angleDeg = 0.0;
-          if (mag1 > 0 && mag2 > 0) {
-            final cosAngle = (dot / (mag1 * mag2)).clamp(-1.0, 1.0);
-            angleDeg = acos(cosAngle) * 180 / pi;
+        if (currentAngleType == AngleType.normal) {
+          // Обычный угол: 3 точки
+          if (currentPoints.length == 2) {
+            // Рисуем линию от первой точки ко второй (вершине)
+            canvas.drawLine(currentPoints[0], currentPoints[1], paint);
+          } else if (currentPoints.length == 3) {
+            // Рисуем полный угол
+            final vertex = currentPoints[1]; // Вершина - вторая точка
+            final point1 = currentPoints[0]; // Первая точка на первом луче
+            final point2 = currentPoints[2]; // Третья точка на втором луче
+            
+            // Вычисляем угол для предварительного просмотра
+            final v1 = point1 - vertex;
+            final v2 = point2 - vertex;
+            final dot = v1.dx * v2.dx + v1.dy * v2.dy;
+            final mag1 = sqrt(v1.dx * v1.dx + v1.dy * v1.dy);
+            final mag2 = sqrt(v2.dx * v2.dx + v2.dy * v2.dy);
+            double angleDeg = 0.0;
+            if (mag1 > 0 && mag2 > 0) {
+              final cosAngle = (dot / (mag1 * mag2)).clamp(-1.0, 1.0);
+              angleDeg = acos(cosAngle) * 180 / pi;
+            }
+            
+            _drawAngle(canvas, vertex, point1, point2, paint, fillPaint, completedAngles.length + 1, angleDeg, false);
           }
-          
-          _drawAngle(canvas, vertex, point1, point2, paint, fillPaint, completedAngles.length + 1, angleDeg, false);
+        } else {
+          // Угол Кобба: 4 точки
+          if (currentPoints.length == 2) {
+            // Рисуем первую линию
+            canvas.drawLine(currentPoints[0], currentPoints[1], paint);
+          } else if (currentPoints.length == 3) {
+            // Рисуем первую линию и начало второй
+            canvas.drawLine(currentPoints[0], currentPoints[1], paint);
+          } else if (currentPoints.length == 4) {
+            // Рисуем обе линии и вычисляем угол Кобба
+            final l1Start = currentPoints[0];
+            final l1End = currentPoints[1];
+            final l2Start = currentPoints[2];
+            final l2End = currentPoints[3];
+            
+            // Вычисляем угол Кобба для предварительного просмотра
+            final v1 = l1End - l1Start;
+            final v2 = l2End - l2Start;
+            final mag1 = sqrt(v1.dx * v1.dx + v1.dy * v1.dy);
+            final mag2 = sqrt(v2.dx * v2.dx + v2.dy * v2.dy);
+            double angleDeg = 0.0;
+            if (mag1 > 0 && mag2 > 0) {
+              final dot = v1.dx * v2.dx + v1.dy * v2.dy;
+              final cosAngle = (dot / (mag1 * mag2)).clamp(-1.0, 1.0);
+              final angle = acos(cosAngle) * 180 / pi;
+              angleDeg = angle > 90 ? 180 - angle : angle;
+            }
+            
+            _drawCobbAngle(canvas, l1Start, l1End, l2Start, l2End, paint, fillPaint, completedAngles.length + 1, angleDeg, false);
+          }
         }
       }
       
@@ -771,6 +867,163 @@ class AnglePainter extends CustomPainter {
         Offset(centerX + 2, centerY + 2),
         Paint()..color = Colors.white..strokeWidth = 2.0
       );
+    }
+  }
+  
+  void _drawCobbAngle(Canvas canvas, Offset line1Start, Offset line1End, Offset line2Start, Offset line2End, Paint paint, Paint fillPaint, int angleNumber, double angleDegrees, bool isSelected) {
+    // Рисуем две линии
+    canvas.drawLine(line1Start, line1End, paint..strokeWidth = 2.0);
+    canvas.drawLine(line2Start, line2End, paint..strokeWidth = 2.0);
+    
+    // Рисуем пунктирную линию между концами (line1End и line2End)
+    final dashedPaint = Paint()
+      ..color = paint.color.withOpacity(0.5)
+      ..strokeWidth = 1.0
+      ..style = PaintingStyle.stroke;
+    _drawDashedLine(canvas, line1End, line2End, dashedPaint);
+    
+    // Рисуем конечные точки линий
+    canvas.drawCircle(line1Start, 4, fillPaint);
+    canvas.drawCircle(line1Start, 4, Paint()..color = Colors.black..strokeWidth = 1.0);
+    canvas.drawCircle(line1End, 4, fillPaint);
+    canvas.drawCircle(line1End, 4, Paint()..color = Colors.black..strokeWidth = 1.0);
+    canvas.drawCircle(line2Start, 4, fillPaint);
+    canvas.drawCircle(line2Start, 4, Paint()..color = Colors.black..strokeWidth = 1.0);
+    canvas.drawCircle(line2End, 4, fillPaint);
+    canvas.drawCircle(line2End, 4, Paint()..color = Colors.black..strokeWidth = 1.0);
+    
+    // Рисуем текст с углом Кобба
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: 'Cobb ∠$angleNumber: ${angleDegrees.toStringAsFixed(1)}°',
+        style: const TextStyle(
+          color: Colors.cyan,
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          backgroundColor: Colors.black87,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    
+    // Позиционируем текст между двумя линиями
+    final midPoint = Offset(
+      (line1Start.dx + line1End.dx + line2Start.dx + line2End.dx) / 4,
+      (line1Start.dy + line1End.dy + line2Start.dy + line2End.dy) / 4,
+    );
+    
+    final textOffset = Offset(
+      midPoint.dx + 20,
+      midPoint.dy - textPainter.height / 2,
+    );
+    
+    // Рисуем фон для текста
+    final bgRect = Rect.fromLTWH(
+      textOffset.dx - 5,
+      textOffset.dy - 2,
+      textPainter.width + 10,
+      textPainter.height + 4,
+    );
+    canvas.drawRect(bgRect, Paint()..color = Colors.black87);
+    
+    textPainter.paint(canvas, textOffset);
+    
+    // Рисуем индикатор перетаскивания для выбранного угла
+    if (isSelected) {
+      final dragHandleSize = 20.0;
+      final dragHandleX = midPoint.dx - dragHandleSize / 2;
+      final dragHandleY = midPoint.dy - dragHandleSize - 5;
+      final dragHandleRect = Rect.fromLTWH(dragHandleX, dragHandleY, dragHandleSize, dragHandleSize);
+      
+      // Рисуем фон индикатора
+      canvas.drawRect(dragHandleRect, Paint()
+        ..color = Colors.orange
+        ..style = PaintingStyle.fill);
+      canvas.drawRect(dragHandleRect, Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5);
+      
+      // Рисуем стрелочки (крестик из стрелок)
+      final centerX = dragHandleX + dragHandleSize / 2;
+      final centerY = dragHandleY + dragHandleSize / 2;
+      final arrowSize = 6.0;
+      
+      // Вертикальные стрелки
+      canvas.drawLine(
+        Offset(centerX, centerY - arrowSize),
+        Offset(centerX, centerY + arrowSize),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX - 2, centerY - 4),
+        Offset(centerX, centerY - arrowSize),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX + 2, centerY - 4),
+        Offset(centerX, centerY - arrowSize),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX - 2, centerY + 4),
+        Offset(centerX, centerY + arrowSize),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX + 2, centerY + 4),
+        Offset(centerX, centerY + arrowSize),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      
+      // Горизонтальные стрелки
+      canvas.drawLine(
+        Offset(centerX - arrowSize, centerY),
+        Offset(centerX + arrowSize, centerY),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX - 4, centerY - 2),
+        Offset(centerX - arrowSize, centerY),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX - 4, centerY + 2),
+        Offset(centerX - arrowSize, centerY),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX + 4, centerY - 2),
+        Offset(centerX + arrowSize, centerY),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+      canvas.drawLine(
+        Offset(centerX + 4, centerY + 2),
+        Offset(centerX + arrowSize, centerY),
+        Paint()..color = Colors.white..strokeWidth = 2.0
+      );
+    }
+  }
+  
+  // Вспомогательная функция для рисования пунктирной линии
+  void _drawDashedLine(Canvas canvas, Offset start, Offset end, Paint paint) {
+    const dashWidth = 5.0;
+    const dashSpace = 3.0;
+    
+    final delta = end - start;
+    final distance = delta.distance;
+    final normalizedDelta = delta / distance;
+    
+    double currentDistance = 0;
+    while (currentDistance < distance) {
+      final segmentStart = start + normalizedDelta * currentDistance;
+      final nextDistance = currentDistance + dashWidth;
+      final segmentEnd = nextDistance > distance
+          ? end
+          : start + normalizedDelta * nextDistance;
+      
+      canvas.drawLine(segmentStart, segmentEnd, paint);
+      currentDistance = nextDistance + dashSpace;
     }
   }
   
@@ -1174,11 +1427,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // Линейка: все завершенные измерения (L1, L2, L3...)
   List<RulerLine> _completedRulerLines = [];
   
-  // Угол: текущие точки (0-3 точки) для активного измерения
+  // Угол: текущие точки (0-3 точки для обычного угла, 0-4 точки для Кобба)
   List<Offset> _anglePoints = [];
   
   // Угол: все завершенные измерения (∠1, ∠2, ∠3...)
   List<AngleMeasurement> _completedAngles = [];
+  
+  // Текущий тип измерения угла
+  AngleType _currentAngleType = AngleType.normal;
   
   // Выделение и перетаскивание
   int? _selectedRulerIndex; // Индекс выбранной линейки
@@ -1808,16 +2064,40 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final canvasSize = _getCanvasSize();
     for (int i = 0; i < _completedAngles.length; i++) {
       final angle = _completedAngles[i];
-      // Преобразуем относительные координаты в scene coordinates
-      final absVertex = angle.getAbsoluteVertex(canvasSize);
-      final absPoint1 = angle.getAbsolutePoint1(canvasSize);
-      final absPoint2 = angle.getAbsolutePoint2(canvasSize);
-      // Проверяем расстояние до лучей и вершины
-      final distToRay1 = _pointToLineDistance(point, absVertex, absPoint1);
-      final distToRay2 = _pointToLineDistance(point, absVertex, absPoint2);
-      final distToVertex = (point - absVertex).distance;
-      if (distToRay1 <= threshold || distToRay2 <= threshold || distToVertex <= threshold * 2) {
-        return i;
+      
+      if (angle.type == AngleType.cobb) {
+        // Для угла Кобба проверяем попадание на обе линии
+        final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+        final absLine1End = angle.getAbsoluteLine1End(canvasSize);
+        final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+        final absLine2End = angle.getAbsoluteLine2End(canvasSize);
+        
+        if (absLine1End != null && absLine2End != null) {
+          final distToLine1 = _pointToLineDistance(point, absPoint1, absLine1End);
+          final distToLine2 = _pointToLineDistance(point, absPoint2, absLine2End);
+          final distToLine1Start = (point - absPoint1).distance;
+          final distToLine1End = (point - absLine1End).distance;
+          final distToLine2Start = (point - absPoint2).distance;
+          final distToLine2End = (point - absLine2End).distance;
+          
+          if (distToLine1 <= threshold || distToLine2 <= threshold ||
+              distToLine1Start <= threshold * 2 || distToLine1End <= threshold * 2 ||
+              distToLine2Start <= threshold * 2 || distToLine2End <= threshold * 2) {
+            return i;
+          }
+        }
+      } else {
+        // Для обычного угла проверяем лучи и вершину
+        final absVertex = angle.getAbsoluteVertex(canvasSize);
+        final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+        final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+        // Проверяем расстояние до лучей и вершины
+        final distToRay1 = _pointToLineDistance(point, absVertex, absPoint1);
+        final distToRay2 = _pointToLineDistance(point, absVertex, absPoint2);
+        final distToVertex = (point - absVertex).distance;
+        if (distToRay1 <= threshold || distToRay2 <= threshold || distToVertex <= threshold * 2) {
+          return i;
+        }
       }
     }
     return null;
@@ -1904,12 +2184,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (angleIndex < 0 || angleIndex >= _completedAngles.length) return false;
     final canvasSize = _getCanvasSize();
     final angle = _completedAngles[angleIndex];
-    final absVertex = angle.getAbsoluteVertex(canvasSize);
+    
+    Offset handleCenter;
+    if (angle.type == AngleType.cobb) {
+      // Для угла Кобба используем центр между двумя линиями
+      final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+      final absLine1End = angle.getAbsoluteLine1End(canvasSize);
+      final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+      final absLine2End = angle.getAbsoluteLine2End(canvasSize);
+      
+      if (absLine1End != null && absLine2End != null) {
+        handleCenter = Offset(
+          (absPoint1.dx + absLine1End.dx + absPoint2.dx + absLine2End.dx) / 4,
+          (absPoint1.dy + absLine1End.dy + absPoint2.dy + absLine2End.dy) / 4,
+        );
+      } else {
+        return false;
+      }
+    } else {
+      // Для обычного угла используем вершину
+      handleCenter = angle.getAbsoluteVertex(canvasSize);
+    }
     
     // Увеличенный хитбокс для лучшего UX
     final dragHandleSize = 50.0;
-    final dragHandleX = absVertex.dx - dragHandleSize / 2;
-    final dragHandleY = absVertex.dy - dragHandleSize - 5;
+    final dragHandleX = handleCenter.dx - dragHandleSize / 2;
+    final dragHandleY = handleCenter.dy - dragHandleSize - 5;
     final dragHandleRect = Rect.fromLTWH(dragHandleX, dragHandleY, dragHandleSize, dragHandleSize);
     
     return dragHandleRect.contains(point);
@@ -1989,18 +2289,45 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _selectedAngleIndex! < _completedAngles.length) {
         final canvasSize = _getCanvasSize();
         final angle = _completedAngles[_selectedAngleIndex!];
-        final absVertex = angle.getAbsoluteVertex(canvasSize);
-        final absPoint1 = angle.getAbsolutePoint1(canvasSize);
-        final absPoint2 = angle.getAbsolutePoint2(canvasSize);
-        final distToVertex = (sceneOffset - absVertex).distance;
-        final distToPoint1 = (sceneOffset - absPoint1).distance;
-        final distToPoint2 = (sceneOffset - absPoint2).distance;
-        final distToRay1 = _pointToLineDistance(sceneOffset, absVertex, absPoint1);
-        final distToRay2 = _pointToLineDistance(sceneOffset, absVertex, absPoint2);
-        // Если клик близко к выделенному углу, не создаем новую точку
-        if (distToVertex <= 30.0 || distToPoint1 <= 30.0 || distToPoint2 <= 30.0 || 
-            distToRay1 <= 30.0 || distToRay2 <= 30.0) {
-          return;
+        
+        if (angle.type == AngleType.cobb) {
+          // Для угла Кобба проверяем попадание на обе линии
+          final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+          final absLine1End = angle.getAbsoluteLine1End(canvasSize);
+          final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+          final absLine2End = angle.getAbsoluteLine2End(canvasSize);
+          
+          if (absLine1End != null && absLine2End != null) {
+            final distToLine1Start = (sceneOffset - absPoint1).distance;
+            final distToLine1End = (sceneOffset - absLine1End).distance;
+            final distToLine2Start = (sceneOffset - absPoint2).distance;
+            final distToLine2End = (sceneOffset - absLine2End).distance;
+            final distToLine1 = _pointToLineDistance(sceneOffset, absPoint1, absLine1End);
+            final distToLine2 = _pointToLineDistance(sceneOffset, absPoint2, absLine2End);
+            
+            // Если клик близко к выделенному углу Кобба, не создаем новую точку
+            if (distToLine1Start <= 30.0 || distToLine1End <= 30.0 || 
+                distToLine2Start <= 30.0 || distToLine2End <= 30.0 ||
+                distToLine1 <= 30.0 || distToLine2 <= 30.0) {
+              return;
+            }
+          }
+        } else {
+          // Для обычного угла проверяем вершину и лучи
+          final absVertex = angle.getAbsoluteVertex(canvasSize);
+          final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+          final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+          final distToVertex = (sceneOffset - absVertex).distance;
+          final distToPoint1 = (sceneOffset - absPoint1).distance;
+          final distToPoint2 = (sceneOffset - absPoint2).distance;
+          final distToRay1 = _pointToLineDistance(sceneOffset, absVertex, absPoint1);
+          final distToRay2 = _pointToLineDistance(sceneOffset, absVertex, absPoint2);
+          
+          // Если клик близко к выделенному углу, не создаем новую точку
+          if (distToVertex <= 30.0 || distToPoint1 <= 30.0 || distToPoint2 <= 30.0 || 
+              distToRay1 <= 30.0 || distToRay2 <= 30.0) {
+            return;
+          }
         }
       }
     }
@@ -2008,16 +2335,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Обрабатываем клик для инструмента угла (максимально быстро)
     if (_currentTool == ToolMode.angle) {
       final int currentLength = _anglePoints.length;
-      final bool willComplete = currentLength == 2;
+      final int requiredPoints = _currentAngleType == AngleType.normal ? 3 : 4;
+      final bool willComplete = currentLength == requiredPoints - 1;
       final List<Offset> pointsToComplete = willComplete ? List.from(_anglePoints) : [];
       
       // Немедленно обновляем точки
       setState(() {
-        if (currentLength == 0) {
-          _anglePoints.add(sceneOffset);
-        } else if (currentLength == 1) {
-          _anglePoints.add(sceneOffset);
-        } else if (currentLength == 2) {
+        if (currentLength < requiredPoints) {
           _anglePoints.add(sceneOffset);
         } else {
           _anglePoints = [sceneOffset];
@@ -2025,14 +2349,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       });
       
       // Завершаем угол через микротаск для минимальной задержки
-      if (willComplete && pointsToComplete.length == 2) {
+      if (willComplete) {
         scheduleMicrotask(() {
           final canvasSize = _getCanvasSize();
-          final completedAngle = AngleMeasurement(
-            vertex: _sceneToRelativeCoordinates(pointsToComplete[1], canvasSize),
-            point1: _sceneToRelativeCoordinates(pointsToComplete[0], canvasSize),
-            point2: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
-          );
+          AngleMeasurement completedAngle;
+          
+          if (_currentAngleType == AngleType.normal) {
+            // Обычный угол: 3 точки (точка1, вершина, точка2)
+            completedAngle = AngleMeasurement(
+              vertex: _sceneToRelativeCoordinates(pointsToComplete[1], canvasSize),
+              point1: _sceneToRelativeCoordinates(pointsToComplete[0], canvasSize),
+              point2: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
+              type: AngleType.normal,
+            );
+          } else {
+            // Угол Кобба: 4 точки (начало линии1, конец линии1, начало линии2, конец линии2)
+            completedAngle = AngleMeasurement(
+              vertex: Offset.zero, // Не используется для угла Кобба
+              point1: _sceneToRelativeCoordinates(pointsToComplete[0], canvasSize),
+              point2: _sceneToRelativeCoordinates(pointsToComplete[2], canvasSize),
+              type: AngleType.cobb,
+              line1End: _sceneToRelativeCoordinates(pointsToComplete[1], canvasSize),
+              line2End: _sceneToRelativeCoordinates(sceneOffset, canvasSize),
+            );
+          }
+          
           setState(() {
             _completedAngles = List.of(_completedAngles)..add(completedAngle);
             _addToHistory(ActionType.angleAdded, null);
@@ -2718,11 +3059,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
       setState(() {
         final angle = _completedAngles[_selectedAngleIndex!];
-        _completedAngles[_selectedAngleIndex!] = AngleMeasurement(
-          vertex: Offset(angle.vertex.dx + deltaRelative.dx, angle.vertex.dy + deltaRelative.dy),
-          point1: Offset(angle.point1.dx + deltaRelative.dx, angle.point1.dy + deltaRelative.dy),
-          point2: Offset(angle.point2.dx + deltaRelative.dx, angle.point2.dy + deltaRelative.dy),
-        );
+        
+        if (angle.type == AngleType.cobb) {
+          // Для угла Кобба перемещаем все 4 точки
+          _completedAngles[_selectedAngleIndex!] = AngleMeasurement(
+            vertex: Offset(angle.vertex.dx + deltaRelative.dx, angle.vertex.dy + deltaRelative.dy),
+            point1: Offset(angle.point1.dx + deltaRelative.dx, angle.point1.dy + deltaRelative.dy),
+            point2: Offset(angle.point2.dx + deltaRelative.dx, angle.point2.dy + deltaRelative.dy),
+            type: AngleType.cobb,
+            line1End: angle.line1End != null 
+                ? Offset(angle.line1End!.dx + deltaRelative.dx, angle.line1End!.dy + deltaRelative.dy)
+                : null,
+            line2End: angle.line2End != null
+                ? Offset(angle.line2End!.dx + deltaRelative.dx, angle.line2End!.dy + deltaRelative.dy)
+                : null,
+          );
+        } else {
+          // Для обычного угла перемещаем 3 точки
+          _completedAngles[_selectedAngleIndex!] = AngleMeasurement(
+            vertex: Offset(angle.vertex.dx + deltaRelative.dx, angle.vertex.dy + deltaRelative.dy),
+            point1: Offset(angle.point1.dx + deltaRelative.dx, angle.point1.dy + deltaRelative.dy),
+            point2: Offset(angle.point2.dx + deltaRelative.dx, angle.point2.dy + deltaRelative.dy),
+            type: AngleType.normal,
+          );
+        }
+        
         _dragOffset = sceneOffset;
       });
       return;
@@ -3870,11 +4231,75 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   onPressed: () => _switchTool(ToolMode.ruler)
                                 ),
                                 const SizedBox(height: 15),
-                                IconButton(
-                                  icon: const Icon(Icons.alt_route), 
-                                  color: _currentTool == ToolMode.angle ? Colors.lightBlueAccent : Colors.white, 
-                                  onPressed: () => _switchTool(ToolMode.angle),
-                                  tooltip: 'Измерение угла (3 клика)',
+                                GestureDetector(
+                                  onSecondaryTapDown: (details) {
+                                    // Показываем меню выбора типа угла при ПКМ
+                                    final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+                                    showMenu<AngleType>(
+                                      context: context,
+                                      position: RelativeRect.fromRect(
+                                        details.globalPosition & const Size(40, 40),
+                                        Offset.zero & overlay.size,
+                                      ),
+                                      items: [
+                                        PopupMenuItem<AngleType>(
+                                          value: AngleType.normal,
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                _currentAngleType == AngleType.normal ? Icons.check : Icons.check_box_outline_blank,
+                                                size: 20,
+                                                color: _currentAngleType == AngleType.normal ? Colors.blue : Colors.grey,
+                                              ),
+                                              const SizedBox(width: 10),
+                                              const Text('Обычный угол (3 клика)'),
+                                            ],
+                                          ),
+                                        ),
+                                        PopupMenuItem<AngleType>(
+                                          value: AngleType.cobb,
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                _currentAngleType == AngleType.cobb ? Icons.check : Icons.check_box_outline_blank,
+                                                size: 20,
+                                                color: _currentAngleType == AngleType.cobb ? Colors.blue : Colors.grey,
+                                              ),
+                                              const SizedBox(width: 10),
+                                              const Text('Угол Кобба (4 клика)'),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ).then((AngleType? selectedType) {
+                                      if (selectedType != null && selectedType != _currentAngleType) {
+                                        setState(() {
+                                          _currentAngleType = selectedType;
+                                          // Очищаем текущие точки при смене типа
+                                          _anglePoints = [];
+                                        });
+                                        // Показываем подсказку о выбранном режиме
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text(selectedType == AngleType.cobb 
+                                                ? 'Выбран: Угол Кобба (4 клика)' 
+                                                : 'Выбран: Обычный угол (3 клика)'),
+                                            duration: const Duration(seconds: 2),
+                                          ),
+                                        );
+                                      }
+                                    });
+                                  },
+                                  child: Tooltip(
+                                    message: _currentAngleType == AngleType.normal 
+                                        ? 'Измерение угла (3 клика)\nПКМ: выбрать тип угла' 
+                                        : 'Угол Кобба (4 клика)\nПКМ: выбрать тип угла',
+                                    child: IconButton(
+                                      icon: const Icon(Icons.alt_route), 
+                                      color: _currentTool == ToolMode.angle ? Colors.lightBlueAccent : Colors.white, 
+                                      onPressed: () => _switchTool(ToolMode.angle),
+                                    ),
+                                  ),
                                 ),
                                 const SizedBox(height: 15),
                                 IconButton(
@@ -4278,11 +4703,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                     );
                                                     setState(() {
                                                       final angle = _completedAngles[_selectedAngleIndex!];
-                                                      _completedAngles[_selectedAngleIndex!] = AngleMeasurement(
-                                                        vertex: Offset(angle.vertex.dx + deltaRelative.dx, angle.vertex.dy + deltaRelative.dy),
-                                                        point1: Offset(angle.point1.dx + deltaRelative.dx, angle.point1.dy + deltaRelative.dy),
-                                                        point2: Offset(angle.point2.dx + deltaRelative.dx, angle.point2.dy + deltaRelative.dy),
-                                                      );
+                                                      
+                                                      if (angle.type == AngleType.cobb) {
+                                                        // Для угла Кобба перемещаем все 4 точки
+                                                        _completedAngles[_selectedAngleIndex!] = AngleMeasurement(
+                                                          vertex: Offset(angle.vertex.dx + deltaRelative.dx, angle.vertex.dy + deltaRelative.dy),
+                                                          point1: Offset(angle.point1.dx + deltaRelative.dx, angle.point1.dy + deltaRelative.dy),
+                                                          point2: Offset(angle.point2.dx + deltaRelative.dx, angle.point2.dy + deltaRelative.dy),
+                                                          type: AngleType.cobb,
+                                                          line1End: angle.line1End != null 
+                                                              ? Offset(angle.line1End!.dx + deltaRelative.dx, angle.line1End!.dy + deltaRelative.dy)
+                                                              : null,
+                                                          line2End: angle.line2End != null
+                                                              ? Offset(angle.line2End!.dx + deltaRelative.dx, angle.line2End!.dy + deltaRelative.dy)
+                                                              : null,
+                                                        );
+                                                      } else {
+                                                        // Для обычного угла перемещаем 3 точки
+                                                        _completedAngles[_selectedAngleIndex!] = AngleMeasurement(
+                                                          vertex: Offset(angle.vertex.dx + deltaRelative.dx, angle.vertex.dy + deltaRelative.dy),
+                                                          point1: Offset(angle.point1.dx + deltaRelative.dx, angle.point1.dy + deltaRelative.dy),
+                                                          point2: Offset(angle.point2.dx + deltaRelative.dx, angle.point2.dy + deltaRelative.dy),
+                                                          type: AngleType.normal,
+                                                        );
+                                                      }
+                                                      
                                                       _dragOffset = sceneOffset;
                                                     });
                                                     return;
@@ -4439,6 +4884,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                         ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
                                                         : null,
                                                       rotationAngle: _rotationAngle,
+                                                      currentAngleType: _currentAngleType,
                                                     ),
                                                     child: Container(), // Пустой контейнер для предотвращения ошибок
                                                   ),
