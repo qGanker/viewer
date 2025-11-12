@@ -738,9 +738,20 @@ class AnglePainter extends CustomPainter {
             final l2Start = currentPoints[2];
             final l2End = currentPoints[3];
             
-            // Вычисляем угол Кобба для предварительного просмотра
-            final v1 = l1End - l1Start;
-            final v2 = l2End - l2Start;
+            // Используем тот же размер для вычислений, что и для завершенных углов
+            final angleSize = imageSize ?? size;
+            
+            // Преобразуем scene coordinates в координаты изображения для правильного вычисления угла
+            final scaleX = angleSize.width / size.width;
+            final scaleY = angleSize.height / size.height;
+            final scaledL1Start = Offset(l1Start.dx * scaleX, l1Start.dy * scaleY);
+            final scaledL1End = Offset(l1End.dx * scaleX, l1End.dy * scaleY);
+            final scaledL2Start = Offset(l2Start.dx * scaleX, l2Start.dy * scaleY);
+            final scaledL2End = Offset(l2End.dx * scaleX, l2End.dy * scaleY);
+            
+            // Вычисляем угол Кобба для предварительного просмотра используя масштабированные координаты
+            final v1 = scaledL1End - scaledL1Start;
+            final v2 = scaledL2End - scaledL2Start;
             final mag1 = sqrt(v1.dx * v1.dx + v1.dy * v1.dy);
             final mag2 = sqrt(v2.dx * v2.dx + v2.dy * v2.dy);
             double angleDeg = 0.0;
