@@ -2398,20 +2398,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     
-    // Режим калибровки - быстрая обработка
+    // Режим калибровки теперь работает через drag в Listener (onPointerDown/Move/Up)
+    // Эта секция больше не используется
     if (_isCalibrationMode) {
-      setState(() {
-        if (_calibrationPoints.length == 0) {
-          _calibrationPoints.add(sceneOffset);
-        } else if (_calibrationPoints.length == 1) {
-          _calibrationPoints.add(sceneOffset);
-          scheduleMicrotask(() {
-            _showCalibrationInputDialog();
-          });
-        } else {
-          _calibrationPoints = [sceneOffset];
-        }
-      });
+      // Калибровка обрабатывается в Listener
       return;
     }
     
@@ -2701,13 +2691,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   
   // Проверяет, есть ли измерение рядом с указателем (для раннего отключения pan)
   bool _checkMeasurementNearPointer(Offset localPosition) {
-    // Если активен инструмент линейки, угла или стрелки, не блокируем pan - позволяем создавать новые элементы
+    // Если активен инструмент линейки, угла, стрелки или режим калибровки, не блокируем pan - позволяем создавать новые элементы
     if (_currentTool == ToolMode.ruler || _currentTool == ToolMode.arrow || 
-        (_currentTool == ToolMode.angle && _currentAngleType == AngleType.cobb)) {
+        (_currentTool == ToolMode.angle && _currentAngleType == AngleType.cobb) ||
+        _isCalibrationMode) {
       return false;
     }
     
-    if (_rulerPoints.isNotEmpty || _anglePoints.isNotEmpty || _arrowPoints.isNotEmpty) {
+    if (_rulerPoints.isNotEmpty || _anglePoints.isNotEmpty || _arrowPoints.isNotEmpty || _calibrationPoints.isNotEmpty) {
       return false; // Если создаются новые измерения, не блокируем pan
     }
     
@@ -4435,6 +4426,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                 // Ранний перехват для проверки измерений и блокировки pan
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerDown(event);
+                                                } else if (_isCalibrationMode && event.buttons == 1) {
+                                                  // Обрабатываем начало калибровки (ЛКМ)
+                                                  if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                    _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                    _matrixCacheValid = true;
+                                                  }
+                                                  final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                  print("=== CALIBRATION POINTER DOWN: начало калибровки в точке $sceneOffset");
+                                                  setState(() {
+                                                    _isDragging = true;
+                                                    _calibrationPoints.clear();
+                                                    _calibrationPoints.add(sceneOffset);
+                                                  });
                                                 } else if (_currentTool == ToolMode.angle && event.buttons == 1) {
                                                   // Обрабатываем начало создания угла (ЛКМ)
                                                   if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
@@ -4671,13 +4675,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               onPointerUp: (PointerUpEvent event) {
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerUp(event);
+                                                } else if (_isCalibrationMode && _calibrationPoints.isNotEmpty) {
+                                                  // Завершаем калибровку
+                                                  print("=== CALIBRATION POINTER UP: завершение калибровки, точек: ${_calibrationPoints.length}");
+                                                  
+                                                  if (_calibrationPoints.length >= 2) {
+                                                    final start = _calibrationPoints[0];
+                                                    final end = _calibrationPoints[1];
+                                                    final distance = (end - start).distance;
+                                                    print("=== CALIBRATION POINTER UP: расстояние = $distance");
+                                                    
+                                                    if (distance > 5.0) {
+                                                      setState(() {
+                                                        _isDragging = false;
+                                                      });
+                                                      // Показываем диалог калибровки
+                                                      scheduleMicrotask(() {
+                                                        _showCalibrationInputDialog();
+                                                      });
+                                                      print("=== CALIBRATION POINTER UP: Показываем диалог калибровки");
+                                                    } else {
+                                                      print("=== CALIBRATION POINTER UP: расстояние слишком маленькое");
+                                                      setState(() {
+                                                        _calibrationPoints.clear();
+                                                        _isDragging = false;
+                                                      });
+                                                    }
+                                                  } else if (_calibrationPoints.length == 1) {
+                                                    // Если пользователь не начал тянуть - просто очищаем
+                                                    print("=== CALIBRATION POINTER UP: пользователь не начал тянуть");
+                                                    setState(() {
+                                                      _calibrationPoints.clear();
+                                                      _isDragging = false;
+                                                    });
+                                                  }
                                                 } else if (_currentTool == ToolMode.angle && _currentAngleType == AngleType.cobb && _anglePoints.isNotEmpty) {
                                                   // Завершаем линию угла Кобба
                                                   print("=== ANGLE COBB POINTER UP: завершение линии, текущие точки: ${_anglePoints.length}");
-                                                  
-                                                  if (_anglePoints.length == 1) {
-                                                    _anglePoints.add(_anglePoints[0]);
-                                                  }
                                                   
                                                   if (_anglePoints.length == 2) {
                                                     // Завершили первую линию
@@ -4697,11 +4731,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                         _isDragging = false;
                                                       });
                                                     }
-                                                  } else if (_anglePoints.length == 3) {
-                                                    _anglePoints.add(_anglePoints[2]);
-                                                  }
-                                                  
-                                                  if (_anglePoints.length == 4) {
+                                                  } else if (_anglePoints.length == 1) {
+                                                    // Пользователь не начал тянуть первую линию
+                                                    print("=== ANGLE COBB POINTER UP: пользователь не начал тянуть первую линию");
+                                                    setState(() {
+                                                      _anglePoints.clear();
+                                                      _isDragging = false;
+                                                    });
+                                                  } else if (_anglePoints.length == 4) {
                                                     // Завершили вторую линию - создаем угол
                                                     final line1Start = _anglePoints[0];
                                                     final line1End = _anglePoints[1];
@@ -4734,13 +4771,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                         _isDragging = false;
                                                       });
                                                     }
+                                                  } else if (_anglePoints.length == 3) {
+                                                    // Пользователь не начал тянуть вторую линию
+                                                    print("=== ANGLE COBB POINTER UP: пользователь не начал тянуть вторую линию");
+                                                    setState(() {
+                                                      _anglePoints.removeRange(2, _anglePoints.length);
+                                                      _isDragging = false;
+                                                    });
                                                   }
                                                 } else if (_currentTool == ToolMode.ruler && _rulerPoints.isNotEmpty) {
                                                   // Завершаем создание линейки
-                                                  print("=== RULER POINTER UP: завершение создания линейки");
-                                                  if (_rulerPoints.length == 1) {
-                                                    _rulerPoints.add(_rulerPoints[0]);
-                                                  }
+                                                  print("=== RULER POINTER UP: завершение создания линейки, точек: ${_rulerPoints.length}");
                                                   
                                                   if (_rulerPoints.length >= 2) {
                                                     final start = _rulerPoints[0];
@@ -4769,13 +4810,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                         _isDragging = false;
                                                       });
                                                     }
+                                                  } else if (_rulerPoints.length == 1) {
+                                                    // Если пользователь не начал тянуть - просто очищаем
+                                                    print("=== RULER POINTER UP: пользователь не начал тянуть");
+                                                    setState(() {
+                                                      _rulerPoints.clear();
+                                                      _isDragging = false;
+                                                    });
                                                   }
                                                 } else if (_currentTool == ToolMode.arrow && _arrowPoints.isNotEmpty) {
                                                   // Завершаем создание стрелки
-                                                  print("=== ARROW POINTER UP: завершение создания стрелки");
-                                                  if (_arrowPoints.length == 1) {
-                                                    _arrowPoints.add(_arrowPoints[0]);
-                                                  }
+                                                  print("=== ARROW POINTER UP: завершение создания стрелки, точек: ${_arrowPoints.length}");
                                                   
                                                   if (_arrowPoints.length >= 2) {
                                                     final start = _arrowPoints[0];
@@ -4801,6 +4846,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                         _isDragging = false;
                                                       });
                                                     }
+                                                  } else if (_arrowPoints.length == 1) {
+                                                    // Если пользователь не начал тянуть - просто очищаем
+                                                    print("=== ARROW POINTER UP: пользователь не начал тянуть");
+                                                    setState(() {
+                                                      _arrowPoints.clear();
+                                                      _isDragging = false;
+                                                    });
                                                   }
                                                 } else if (_currentTool == ToolMode.brightness && _brightnessDragStart != null) {
                                                   // Завершаем перетаскивание яркости/контраста
@@ -4829,6 +4881,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               onPointerMove: (PointerMoveEvent event) {
                                                 if (_currentTool == ToolMode.magnifier) {
                                                   _handlePointerMove(event);
+                                                } else if (_isCalibrationMode && _calibrationPoints.isNotEmpty) {
+                                                  // Обновляем позицию конца калибровочной линии
+                                                  if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                    _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                    _matrixCacheValid = true;
+                                                  }
+                                                  final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                  setState(() {
+                                                    if (_calibrationPoints.length == 1) {
+                                                      // Добавляем вторую точку только если она достаточно далеко от первой
+                                                      final distance = (sceneOffset - _calibrationPoints[0]).distance;
+                                                      if (distance > 2.0) {
+                                                        _calibrationPoints.add(sceneOffset);
+                                                      }
+                                                    } else if (_calibrationPoints.length == 2) {
+                                                      _calibrationPoints[1] = sceneOffset;
+                                                    }
+                                                  });
                                                 } else if (_currentTool == ToolMode.angle && _currentAngleType == AngleType.cobb && _anglePoints.isNotEmpty) {
                                                   // Обновляем позицию для угла Кобба
                                                   if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
@@ -4838,14 +4908,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                   final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
                                                   setState(() {
                                                     if (_anglePoints.length == 1) {
-                                                      // Рисуем первую линию
-                                                      _anglePoints.add(sceneOffset);
+                                                      // Добавляем конец первой линии только если он достаточно далеко
+                                                      final distance = (sceneOffset - _anglePoints[0]).distance;
+                                                      if (distance > 2.0) {
+                                                        _anglePoints.add(sceneOffset);
+                                                      }
                                                     } else if (_anglePoints.length == 2) {
                                                       // Обновляем конец первой линии
                                                       _anglePoints[1] = sceneOffset;
                                                     } else if (_anglePoints.length == 3) {
-                                                      // Рисуем вторую линию
-                                                      _anglePoints.add(sceneOffset);
+                                                      // Добавляем конец второй линии только если он достаточно далеко
+                                                      final distance = (sceneOffset - _anglePoints[2]).distance;
+                                                      if (distance > 2.0) {
+                                                        _anglePoints.add(sceneOffset);
+                                                      }
                                                     } else if (_anglePoints.length == 4) {
                                                       // Обновляем конец второй линии
                                                       _anglePoints[3] = sceneOffset;
@@ -4860,7 +4936,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                   final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
                                                   setState(() {
                                                     if (_rulerPoints.length == 1) {
-                                                      _rulerPoints.add(sceneOffset);
+                                                      // Добавляем вторую точку только если она достаточно далеко от первой (минимум 2 пикселя)
+                                                      final distance = (sceneOffset - _rulerPoints[0]).distance;
+                                                      if (distance > 2.0) {
+                                                        _rulerPoints.add(sceneOffset);
+                                                      }
                                                     } else if (_rulerPoints.length == 2) {
                                                       _rulerPoints[1] = sceneOffset;
                                                     }
@@ -4874,7 +4954,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                   final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
                                                   setState(() {
                                                     if (_arrowPoints.length == 1) {
-                                                      _arrowPoints.add(sceneOffset);
+                                                      // Добавляем вторую точку только если она достаточно далеко от первой
+                                                      final distance = (sceneOffset - _arrowPoints[0]).distance;
+                                                      if (distance > 2.0) {
+                                                        _arrowPoints.add(sceneOffset);
+                                                      }
                                                     } else if (_arrowPoints.length == 2) {
                                                       _arrowPoints[1] = sceneOffset;
                                                     }
