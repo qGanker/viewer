@@ -77,6 +77,7 @@ class HotkeySettings {
   final KeyCombination invertKey;
   final KeyCombination rotateKey;
   final KeyCombination annotationKey;
+  final KeyCombination areaKey;
   final KeyCombination undoKey;
 
   HotkeySettings({
@@ -88,6 +89,7 @@ class HotkeySettings {
     KeyCombination? invertKey,
     KeyCombination? rotateKey,
     KeyCombination? annotationKey,
+    KeyCombination? areaKey,
     KeyCombination? undoKey,
   }) : panKey = panKey ?? const KeyCombination(key: 'P'),
        rulerKey = rulerKey ?? const KeyCombination(key: 'R'),
@@ -97,6 +99,7 @@ class HotkeySettings {
        invertKey = invertKey ?? const KeyCombination(key: 'I'),
        rotateKey = rotateKey ?? const KeyCombination(key: 'O'),
        annotationKey = annotationKey ?? const KeyCombination(key: 'A'),
+       areaKey = areaKey ?? const KeyCombination(key: 'S'),
        undoKey = undoKey ?? const KeyCombination(key: 'Z');
 
   Map<String, dynamic> toJson() {
@@ -109,6 +112,7 @@ class HotkeySettings {
       'invertKey': invertKey.toJson(),
       'rotateKey': rotateKey.toJson(),
       'annotationKey': annotationKey.toJson(),
+      'areaKey': areaKey.toJson(),
       'undoKey': undoKey.toJson(),
     };
   }
@@ -123,6 +127,7 @@ class HotkeySettings {
       invertKey: _parseKeyCombination(json['invertKey'], 'I'),
       rotateKey: _parseKeyCombination(json['rotateKey'], 'O'),
       annotationKey: _parseKeyCombination(json['annotationKey'], 'A'),
+      areaKey: _parseKeyCombination(json['areaKey'], 'S'),
       undoKey: _parseKeyCombination(json['undoKey'], 'Z'),
     );
   }
@@ -165,6 +170,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   KeyCombination _invertKey = const KeyCombination(key: 'I');
   KeyCombination _rotateKey = const KeyCombination(key: 'O');
   KeyCombination _annotationKey = const KeyCombination(key: 'A');
+  KeyCombination _areaKey = const KeyCombination(key: 'S');
   KeyCombination _undoKey = const KeyCombination(key: 'Z');
   
   bool _isListening = false;
@@ -184,6 +190,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'invertKey': 'Инверсия',
     'rotateKey': 'Поворот',
     'annotationKey': 'Аннотации',
+    'areaKey': 'Площадь',
     'undoKey': 'Отмена',
   };
 
@@ -281,6 +288,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _invertKey = hotkeySettings.invertKey;
               _rotateKey = hotkeySettings.rotateKey;
               _annotationKey = hotkeySettings.annotationKey;
+              _areaKey = hotkeySettings.areaKey;
               _undoKey = hotkeySettings.undoKey;
             });
           }
@@ -308,6 +316,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         invertKey: _invertKey,
         rotateKey: _rotateKey,
         annotationKey: _annotationKey,
+        areaKey: _areaKey,
         undoKey: _undoKey,
       );
       await prefs.setString('hotkey_settings', jsonEncode(hotkeySettings.toJson()));
@@ -333,12 +342,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _invertKey,
       _rotateKey,
       _annotationKey,
+      _areaKey,
       _undoKey,
     ];
     
     List<String> keyNames = [
       'panKey', 'rulerKey', 'angleKey', 'magnifierKey', 'brightnessKey', 'invertKey',
-      'rotateKey', 'annotationKey', 'undoKey'
+      'rotateKey', 'annotationKey', 'areaKey', 'undoKey'
     ];
     
     for (int i = 0; i < allKeys.length; i++) {
@@ -376,6 +386,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           break;
         case 'annotationKey':
           _annotationKey = combination;
+          break;
+        case 'areaKey':
+          _areaKey = combination;
           break;
         case 'undoKey':
           _undoKey = combination;
@@ -712,6 +725,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           _buildHotkeyRow('invertKey', _toolNames['invertKey'] ?? 'Инверсия', _invertKey),
                           _buildHotkeyRow('rotateKey', _toolNames['rotateKey'] ?? 'Поворот', _rotateKey),
                           _buildHotkeyRow('annotationKey', _toolNames['annotationKey'] ?? 'Аннотации', _annotationKey),
+                          _buildHotkeyRow('areaKey', _toolNames['areaKey'] ?? 'Площадь', _areaKey),
                           _buildHotkeyRow('undoKey', _toolNames['undoKey'] ?? 'Отмена', _undoKey),
                         ],
                       ),

@@ -20,13 +20,16 @@ import '../utils/keyboard_utils.dart';
 import '../widgets/windows_menu_bar.dart';
 
 // Перечисление для инструментов
-enum ToolMode { pan, ruler, angle, magnifier, rotate, brightness, invert, arrow, text }
+enum ToolMode { pan, ruler, angle, magnifier, rotate, brightness, invert, arrow, text, area }
 
 // Перечисление для типов измерения углов
 enum AngleType { normal, cobb }
 
+// Перечисление режимов инструмента площадь
+enum AreaType { freehand, rectangle, circle, ellipse }
+
 // Перечисление для типов действий
-enum ActionType { rulerAdded, angleAdded, textAdded, arrowAdded, brightnessChanged, inverted, rotated }
+enum ActionType { rulerAdded, angleAdded, textAdded, arrowAdded, areaAdded, brightnessChanged, inverted, rotated }
 
 // Класс для хранения истории действий
 class ActionHistory {
@@ -64,6 +67,290 @@ class ArrowAnnotation {
     this.color = Colors.red,
     this.strokeWidth = 3.0,
   });
+}
+
+// Модель фигуры площади
+class AreaShape {
+  final AreaType type;
+  // Для freehand: список точек (относительные координаты 0..1)
+  final List<Offset>? polygonPoints;
+  // Для прямоугольника/эллипса: прямоугольник-рамка (относительные координаты 0..1)
+  final Rect? rect;
+  // Для круга: центр и радиус в относительных координатах
+  final Offset? circleCenter;
+  final double? circleRadius; // относительно меньшей из сторон
+
+  AreaShape.freehand({required List<Offset> points})
+      : type = AreaType.freehand,
+        polygonPoints = points,
+        rect = null,
+        circleCenter = null,
+        circleRadius = null;
+
+  AreaShape.rectangle({required Rect bounds})
+      : type = AreaType.rectangle,
+        rect = bounds,
+        polygonPoints = null,
+        circleCenter = null,
+        circleRadius = null;
+
+  AreaShape.ellipse({required Rect bounds})
+      : type = AreaType.ellipse,
+        rect = bounds,
+        polygonPoints = null,
+        circleCenter = null,
+        circleRadius = null;
+
+  AreaShape.circle({required Offset center, required double radius})
+      : type = AreaType.circle,
+        circleCenter = center,
+        circleRadius = radius,
+        rect = null,
+        polygonPoints = null;
+
+  // Абсолютные координаты для рисования
+  Path toAbsolutePath(Size canvasSize) {
+    final Path path = Path();
+    switch (type) {
+      case AreaType.freehand:
+        if (polygonPoints != null && polygonPoints!.isNotEmpty) {
+          path.moveTo(polygonPoints!.first.dx * canvasSize.width, polygonPoints!.first.dy * canvasSize.height);
+          for (int i = 1; i < polygonPoints!.length; i++) {
+            final p = polygonPoints![i];
+            path.lineTo(p.dx * canvasSize.width, p.dy * canvasSize.height);
+          }
+          path.close();
+        }
+        break;
+      case AreaType.rectangle:
+      case AreaType.ellipse:
+        if (rect != null) {
+          final r = Rect.fromLTWH(
+            rect!.left * canvasSize.width,
+            rect!.top * canvasSize.height,
+            rect!.width * canvasSize.width,
+            rect!.height * canvasSize.height,
+          );
+          if (type == AreaType.rectangle) {
+            path.addRect(r);
+          } else {
+            path.addOval(r);
+          }
+        }
+        break;
+      case AreaType.circle:
+        if (circleCenter != null && circleRadius != null) {
+          final center = Offset(circleCenter!.dx * canvasSize.width, circleCenter!.dy * canvasSize.height);
+          final radiusPx = circleRadius! * (canvasSize.shortestSide);
+          path.addOval(Rect.fromCircle(center: center, radius: radiusPx));
+        }
+        break;
+    }
+    return path;
+  }
+
+  // Площадь в пикселях относительно размера изображения
+  double computePixelArea(Size imageSize) {
+    switch (type) {
+      case AreaType.rectangle:
+        if (rect == null) return 0;
+        return (rect!.width * imageSize.width) * (rect!.height * imageSize.height);
+      case AreaType.ellipse:
+        if (rect == null) return 0;
+        final rx = (rect!.width * imageSize.width) / 2.0;
+        final ry = (rect!.height * imageSize.height) / 2.0;
+        return 3.141592653589793 * rx * ry;
+      case AreaType.circle:
+        if (circleRadius == null) return 0;
+        final r = circleRadius! * imageSize.shortestSide;
+        return 3.141592653589793 * r * r;
+      case AreaType.freehand:
+        if (polygonPoints == null || polygonPoints!.length < 3) return 0;
+        // Формула Гаусса (shoelace)
+        double sum = 0.0;
+        for (int i = 0; i < polygonPoints!.length; i++) {
+          final p1 = polygonPoints![i];
+          final p2 = polygonPoints![(i + 1) % polygonPoints!.length];
+          final x1 = p1.dx * imageSize.width;
+          final y1 = p1.dy * imageSize.height;
+          final x2 = p2.dx * imageSize.width;
+          final y2 = p2.dy * imageSize.height;
+          sum += (x1 * y2 - x2 * y1);
+        }
+        return sum.abs() / 2.0;
+    }
+  }
+
+  AreaShape translated(Offset delta) {
+    double clampUnit(double value) => min(max(value, 0.0), 1.0);
+    double clampRange(double value, double minValue, double maxValue) => min(max(value, minValue), maxValue);
+
+    switch (type) {
+      case AreaType.freehand:
+        if (polygonPoints == null) return this;
+        final movedPoints = polygonPoints!
+            .map((point) => Offset(
+                  clampUnit(point.dx + delta.dx),
+                  clampUnit(point.dy + delta.dy),
+                ))
+            .toList();
+        return AreaShape.freehand(points: movedPoints);
+      case AreaType.rectangle:
+        if (rect == null) return this;
+        final width = rect!.width;
+        final height = rect!.height;
+        final newLeft = clampRange(rect!.left + delta.dx, 0.0, max(0.0, 1.0 - width));
+        final newTop = clampRange(rect!.top + delta.dy, 0.0, max(0.0, 1.0 - height));
+        return AreaShape.rectangle(
+          bounds: Rect.fromLTWH(newLeft, newTop, width, height),
+        );
+      case AreaType.ellipse:
+        if (rect == null) return this;
+        final width = rect!.width;
+        final height = rect!.height;
+        final newLeft = clampRange(rect!.left + delta.dx, 0.0, max(0.0, 1.0 - width));
+        final newTop = clampRange(rect!.top + delta.dy, 0.0, max(0.0, 1.0 - height));
+        return AreaShape.ellipse(
+          bounds: Rect.fromLTWH(newLeft, newTop, width, height),
+        );
+      case AreaType.circle:
+        if (circleCenter == null || circleRadius == null) return this;
+        final newCenter = Offset(
+          clampUnit(circleCenter!.dx + delta.dx),
+          clampUnit(circleCenter!.dy + delta.dy),
+        );
+        return AreaShape.circle(center: newCenter, radius: circleRadius!);
+    }
+  }
+}
+
+// Painter для отрисовки площадей
+class AreaPainter extends CustomPainter {
+  final List<Offset> currentPoints; // scene coordinates
+  final AreaType currentType;
+  final List<AreaShape> completedAreas; // в относительных координатах
+  final double pixelSpacingRow;
+  final double pixelSpacingCol;
+  final Size? imageSize;
+  final double rotationAngle;
+  final int? selectedIndex;
+
+  AreaPainter({
+    required this.currentPoints,
+    required this.currentType,
+    required this.completedAreas,
+    required this.pixelSpacingRow,
+    required this.pixelSpacingCol,
+    this.imageSize,
+    this.rotationAngle = 0.0,
+    this.selectedIndex,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Поворот, как у других пейнтеров
+    if (rotationAngle != 0.0) {
+      canvas.save();
+      final center = Offset(size.width / 2, size.height / 2);
+      canvas.translate(center.dx, center.dy);
+      canvas.rotate(rotationAngle * 3.14159 / 180);
+      canvas.translate(-center.dx, -center.dy);
+    }
+
+    final safeRowSpacing = pixelSpacingRow.isFinite && pixelSpacingRow > 0 ? pixelSpacingRow : 1.0;
+    final safeColSpacing = pixelSpacingCol.isFinite && pixelSpacingCol > 0 ? pixelSpacingCol : safeRowSpacing;
+
+    final Size distanceSize = imageSize ?? size;
+
+    // Завершенные
+    for (int i = 0; i < completedAreas.length; i++) {
+      final area = completedAreas[i];
+      final bool isSelected = selectedIndex == i;
+      final Color strokeColor = isSelected ? Colors.orange : Colors.yellow;
+      final Color fillColor = isSelected ? Colors.orange.withOpacity(0.12) : Colors.yellow.withOpacity(0.08);
+      final stroke = Paint()
+        ..color = strokeColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0;
+      final fill = Paint()
+        ..color = fillColor
+        ..style = PaintingStyle.fill;
+      final path = area.toAbsolutePath(size);
+      canvas.drawPath(path, fill);
+      canvas.drawPath(path, stroke);
+
+      // Площадь
+      final pxArea = area.computePixelArea(distanceSize);
+      final realArea = pxArea * safeRowSpacing * safeColSpacing; // мм^2
+
+      final bounds = path.getBounds();
+      final textPainter = TextPainter(
+        text: TextSpan(
+          text: 'SQ: ${realArea.isFinite ? realArea.toStringAsFixed(1) : '—'} мм²',
+          style: const TextStyle(
+            color: Colors.yellow,
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            backgroundColor: Colors.black87,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final bg = Rect.fromLTWH(bounds.left, bounds.top - textPainter.height - 6, textPainter.width + 10, textPainter.height + 4);
+      canvas.drawRect(bg, Paint()..color = Colors.black87);
+      textPainter.paint(canvas, Offset(bg.left + 5, bg.top + 2));
+    }
+
+    // Текущая фигура (предпросмотр)
+    if (currentPoints.isNotEmpty) {
+      Path preview = Path();
+      switch (currentType) {
+        case AreaType.freehand:
+          preview.moveTo(currentPoints.first.dx, currentPoints.first.dy);
+          for (int i = 1; i < currentPoints.length; i++) {
+            preview.lineTo(currentPoints[i].dx, currentPoints[i].dy);
+          }
+          break;
+        case AreaType.rectangle:
+          if (currentPoints.length >= 2) {
+            final r = Rect.fromPoints(currentPoints.first, currentPoints.last);
+            preview.addRect(r);
+          }
+          break;
+        case AreaType.circle:
+          if (currentPoints.length >= 2) {
+            final center = currentPoints.first;
+            final radius = (currentPoints.last - center).distance;
+            preview.addOval(Rect.fromCircle(center: center, radius: radius));
+          }
+          break;
+        case AreaType.ellipse:
+          if (currentPoints.length >= 2) {
+            final r = Rect.fromPoints(currentPoints.first, currentPoints.last);
+            preview.addOval(r);
+          }
+          break;
+      }
+      if (!preview.getBounds().isEmpty) {
+        final previewStroke = Paint()
+          ..color = Colors.yellow
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0;
+        final previewFill = Paint()
+          ..color = Colors.yellow.withOpacity(0.08)
+          ..style = PaintingStyle.fill;
+        canvas.drawPath(preview, previewFill);
+        canvas.drawPath(preview, previewStroke);
+      }
+    }
+
+    if (rotationAngle != 0.0) {
+      canvas.restore();
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
 // Класс для рисования аннотаций
@@ -1524,6 +1811,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int? _selectedArrowIndex; // Индекс выбранной стрелки
   bool _isDraggingRuler = false; // Флаг перетаскивания линейки
   bool _isDraggingAngle = false; // Флаг перетаскивания угла
+  int? _selectedAreaIndex; // Индекс выбранной области
+  bool _isDraggingArea = false;
+  Offset? _areaDragOffset;
+  Offset? _areaDragOffsetRelative;
+
+  // Площадь: текущие точки и завершенные фигуры
+  AreaType _currentAreaType = AreaType.freehand;
+  List<Offset> _areaPoints = []; // scene coordinates during drawing
+  List<AreaShape> _completedAreas = []; // относительные координаты
   bool _isDraggingText = false; // Флаг перетаскивания текстовой аннотации
   bool _isDraggingArrow = false; // Флаг перетаскивания стрелки
   Offset? _dragOffset; // Смещение при перетаскивании
@@ -1697,6 +1993,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _rulerPoints.clear();
       _anglePoints.clear();
       _arrowPoints.clear();
+      _areaPoints.clear();
       _isDragging = false;
       _lastTapPosition = null;
       _magnifierPosition = null; // Очищаем позицию лупы
@@ -1706,10 +2003,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _selectedAngleIndex = null; // Сбрасываем выделение углов
       _selectedTextIndex = null; // Сбрасываем выделение текстовых аннотаций
       _selectedArrowIndex = null; // Сбрасываем выделение стрелок
+      _selectedAreaIndex = null;
       _isDraggingRuler = false;
       _isDraggingAngle = false;
       _isDraggingText = false;
       _isDraggingArrow = false;
+      _isDraggingArea = false;
+      _areaDragOffset = null;
+      _areaDragOffsetRelative = null;
       _dragOffset = null;
       // Сбрасываем переменные перетаскивания яркости/контраста
       _brightnessDragStart = null;
@@ -1887,6 +2188,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _textAnnotations = []; // Сбрасываем текстовые аннотации
       _arrowAnnotations = []; // Сбрасываем стрелки
       _arrowPoints = []; // Сбрасываем точки для стрелок
+      _completedAreas = [];
+      _areaPoints = [];
+      _selectedAreaIndex = null;
+      _isDraggingArea = false;
+      _areaDragOffset = null;
+      _areaDragOffsetRelative = null;
       _isDragging = false; // Сбрасываем флаг перетаскивания
       _actionHistory.clear(); // Очищаем историю действий
       _brightness = 1.0;
@@ -2137,6 +2444,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     }
     return null;
+  }
+
+  int? _getAreaAtPoint(Offset scenePoint) {
+    if (_completedAreas.isEmpty) return null;
+    final canvasSize = _getCanvasSize();
+    if (canvasSize.width <= 0 || canvasSize.height <= 0) return null;
+
+    final relativePoint = _sceneToRelativeCoordinates(scenePoint, canvasSize);
+    final unrotatedPoint = Offset(
+      relativePoint.dx * canvasSize.width,
+      relativePoint.dy * canvasSize.height,
+    );
+
+    for (int i = _completedAreas.length - 1; i >= 0; i--) {
+      final path = _completedAreas[i].toAbsolutePath(canvasSize);
+      if (path.contains(unrotatedPoint)) {
+        return i;
+      }
+    }
+
+    return null;
+  }
+
+  bool _isPointInsideArea(Offset scenePoint, int areaIndex) {
+    if (areaIndex < 0 || areaIndex >= _completedAreas.length) return false;
+    final canvasSize = _getCanvasSize();
+    if (canvasSize.width <= 0 || canvasSize.height <= 0) return false;
+
+    final relativePoint = _sceneToRelativeCoordinates(scenePoint, canvasSize);
+    final unrotatedPoint = Offset(
+      relativePoint.dx * canvasSize.width,
+      relativePoint.dy * canvasSize.height,
+    );
+    final path = _completedAreas[areaIndex].toAbsolutePath(canvasSize);
+    return path.contains(unrotatedPoint);
   }
   
   // Проверяет, находится ли точка рядом с углом
@@ -2527,6 +2869,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _selectedRulerIndex = null;
           _selectedAngleIndex = null;
           _selectedTextIndex = null;
+          _selectedAreaIndex = null;
+        }
+      });
+      return;
+    }
+
+    final areaIndex = _getAreaAtPoint(sceneOffset);
+    if (areaIndex != null) {
+      setState(() {
+        if (_selectedAreaIndex != areaIndex) {
+          _selectedAreaIndex = areaIndex;
+          _selectedRulerIndex = null;
+          _selectedAngleIndex = null;
+          _selectedTextIndex = null;
+          _selectedArrowIndex = null;
         }
       });
       return;
@@ -2538,6 +2895,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _selectedAngleIndex = null;
       _selectedTextIndex = null;
       _selectedArrowIndex = null;
+      _selectedAreaIndex = null;
     });
   }
   
@@ -2800,6 +3158,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return true;
     }
     if (_getArrowAnnotationAtPoint(sceneOffset, 30.0) != null) {
+      return true;
+    }
+    if (_getAreaAtPoint(sceneOffset) != null) {
       return true;
     }
     
@@ -3340,6 +3701,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _arrowAnnotations.removeLast();
           }
           break;
+        case ActionType.areaAdded:
+          if (_completedAreas.isNotEmpty) {
+            _completedAreas.removeLast();
+          }
+          _selectedAreaIndex = null;
+          break;
         case ActionType.brightnessChanged:
           // Восстанавливаем предыдущую яркость
           if (lastAction.data != null) {
@@ -3476,6 +3843,40 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         'color': arrow.color.value,
         'strokeWidth': arrow.strokeWidth,
       }).toList();
+
+      final areas = _completedAreas.map((area) {
+        final typeString = area.type.toString().split('.').last;
+        switch (area.type) {
+          case AreaType.freehand:
+            return {
+              'type': typeString,
+              'points': area.polygonPoints
+                      ?.map((point) => {
+                            'x': point.dx,
+                            'y': point.dy,
+                          })
+                      .toList() ??
+                  [],
+            };
+          case AreaType.rectangle:
+          case AreaType.ellipse:
+            final rect = area.rect ?? Rect.zero;
+            return {
+              'type': typeString,
+              'left': rect.left,
+              'top': rect.top,
+              'width': rect.width,
+              'height': rect.height,
+            };
+          case AreaType.circle:
+            return {
+              'type': typeString,
+              'centerX': area.circleCenter?.dx ?? 0.0,
+              'centerY': area.circleCenter?.dy ?? 0.0,
+              'radius': area.circleRadius ?? 0.0,
+            };
+        }
+      }).toList();
       
       final data = {
         'patient_name': _patientName,
@@ -3489,6 +3890,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'angles': angles,
           'texts': texts,
           'arrows': arrows,
+          'areas': areas,
         },
         'view_settings': {
           'brightness': _brightness,
@@ -3498,7 +3900,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         },
         'updated_at': DateTime.now().toIso8601String(),
       };
-      print("Сохраняем аннотации: rulers=${rulers.length}, angles=${angles.length}, texts=${texts.length}, arrows=${arrows.length}");
+      print("Сохраняем аннотации: rulers=${rulers.length}, angles=${angles.length}, texts=${texts.length}, arrows=${arrows.length}, areas=${areas.length}");
       await file.writeAsString(const JsonEncoder.withIndent('  ').convert(data));
       print("Метаданные сохранены в файл: ${file.path}");
       if (mounted) {
@@ -3564,7 +3966,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (data.containsKey('annotations') && data['annotations'] is Map) {
           final annotations = data['annotations'] as Map<String, dynamic>;
           print("Загружаем аннотации: ${annotations.keys.toList()}");
-          print("Содержимое аннотаций: rulers=${annotations['rulers']?.length ?? 0}, angles=${annotations['angles']?.length ?? 0}, texts=${annotations['texts']?.length ?? 0}, arrows=${annotations['arrows']?.length ?? 0}");
+          print("Содержимое аннотаций: rulers=${annotations['rulers']?.length ?? 0}, angles=${annotations['angles']?.length ?? 0}, texts=${annotations['texts']?.length ?? 0}, arrows=${annotations['arrows']?.length ?? 0}, areas=${annotations['areas']?.length ?? 0}");
+          
+          _completedAreas = [];
+          _selectedAreaIndex = null;
           
           // Загружаем линейки (относительные координаты)
           if (annotations.containsKey('rulers') && annotations['rulers'] is List) {
@@ -3670,6 +4075,57 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 strokeWidth: (arrow['strokeWidth'] ?? 3.0).toDouble(),
               );
             }).toList();
+          }
+
+          if (annotations.containsKey('areas') && annotations['areas'] is List) {
+            final areasList = annotations['areas'] as List;
+            print("Загружаем ${areasList.length} областей");
+            _completedAreas = areasList.map((area) {
+              try {
+                final typeString = (area['type'] ?? 'freehand').toString().toLowerCase();
+                switch (typeString) {
+                  case 'freehand':
+                    final points = (area['points'] as List?)
+                            ?.map((p) => Offset(
+                                  (p['x'] ?? 0.0).toDouble(),
+                                  (p['y'] ?? 0.0).toDouble(),
+                                ))
+                            .toList() ??
+                        [];
+                    if (points.length >= 3) {
+                      return AreaShape.freehand(points: points);
+                    }
+                    break;
+                  case 'rectangle':
+                    final rect = Rect.fromLTWH(
+                      (area['left'] ?? 0.0).toDouble(),
+                      (area['top'] ?? 0.0).toDouble(),
+                      (area['width'] ?? 0.0).toDouble(),
+                      (area['height'] ?? 0.0).toDouble(),
+                    );
+                    return AreaShape.rectangle(bounds: rect);
+                  case 'ellipse':
+                    final rect = Rect.fromLTWH(
+                      (area['left'] ?? 0.0).toDouble(),
+                      (area['top'] ?? 0.0).toDouble(),
+                      (area['width'] ?? 0.0).toDouble(),
+                      (area['height'] ?? 0.0).toDouble(),
+                    );
+                    return AreaShape.ellipse(bounds: rect);
+                  case 'circle':
+                    return AreaShape.circle(
+                      center: Offset(
+                        (area['centerX'] ?? 0.0).toDouble(),
+                        (area['centerY'] ?? 0.0).toDouble(),
+                      ),
+                      radius: (area['radius'] ?? 0.0).toDouble(),
+                    );
+                }
+              } catch (e) {
+                print("Ошибка при загрузке области: $e");
+              }
+              return null;
+            }).whereType<AreaShape>().toList();
           }
         }
         
@@ -3940,11 +4396,59 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         });
       }
 
+      final areas = _completedAreas.map((area) {
+        final typeString = area.type.toString().split('.').last;
+        switch (area.type) {
+          case AreaType.freehand:
+            final points = area.polygonPoints
+                    ?.map((point) {
+                      final abs = Offset(point.dx * canvasSize.width, point.dy * canvasSize.height);
+                      return {
+                        'x': abs.dx,
+                        'y': abs.dy,
+                      };
+                    })
+                    .toList() ??
+                [];
+            return {
+              'type': typeString,
+              'points': points,
+            };
+          case AreaType.rectangle:
+          case AreaType.ellipse:
+            final rect = area.rect ?? Rect.zero;
+            final absRect = Rect.fromLTWH(
+              rect.left * canvasSize.width,
+              rect.top * canvasSize.height,
+              rect.width * canvasSize.width,
+              rect.height * canvasSize.height,
+            );
+            return {
+              'type': typeString,
+              'left': absRect.left,
+              'top': absRect.top,
+              'width': absRect.width,
+              'height': absRect.height,
+            };
+          case AreaType.circle:
+            final center = area.circleCenter ?? Offset.zero;
+            final absCenter = Offset(center.dx * canvasSize.width, center.dy * canvasSize.height);
+            final radiusPx = (area.circleRadius ?? 0.0) * canvasSize.shortestSide;
+            return {
+              'type': typeString,
+              'centerX': absCenter.dx,
+              'centerY': absCenter.dy,
+              'radius': radiusPx,
+            };
+        }
+      }).toList();
+
       final annotations = jsonEncode({
         'texts': texts,
         'arrows': arrows,
         'rulers': rulers,
         'angles': angles,
+        'areas': areas,
         // Параметры вида для совпадения с экраном
         'rotation_deg': _rotationAngle, // в градусах, кратно 90
         'inverted': _isInverted,
@@ -4146,6 +4650,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             toolChanged = true;
             toolName = 'Стрелка';
             _switchTool(ToolMode.arrow);
+          } else if (HotkeyService.isKeyForTool(keyString, 'area', ctrl: ctrlPressed, alt: altPressed, shift: shiftPressed)) {
+            print('✓ AREA hotkey matched');
+            toolChanged = true;
+            toolName = 'Площадь';
+            _switchTool(ToolMode.area);
           } else if (HotkeyService.isKeyForTool(keyString, 'text', ctrl: ctrlPressed, alt: altPressed, shift: shiftPressed)) {
             print('✓ TEXT hotkey matched');
             toolChanged = true;
@@ -4272,6 +4781,97 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   icon: const Icon(Icons.pan_tool), 
                                   color: _currentTool == ToolMode.pan ? Colors.lightBlueAccent : Colors.white, 
                                   onPressed: () => _switchTool(ToolMode.pan)
+                                ),
+                                const SizedBox(height: 15),
+                                // Инструмент Площадь с выбором режима через ПКМ
+                                GestureDetector(
+                                  onSecondaryTapDown: (details) {
+                                    final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+                                    showMenu<AreaType>(
+                                      context: context,
+                                      position: RelativeRect.fromRect(
+                                        details.globalPosition & const Size(40, 40),
+                                        Offset.zero & overlay.size,
+                                      ),
+                                      items: [
+                                        PopupMenuItem<AreaType>(
+                                          value: AreaType.freehand,
+                                          child: Row(
+                                            children: [
+                                              Icon(_currentAreaType == AreaType.freehand ? Icons.check : Icons.check_box_outline_blank,
+                                                  size: 20, color: _currentAreaType == AreaType.freehand ? Colors.blue : Colors.grey),
+                                              const SizedBox(width: 10),
+                                              const Text('Кривая (произвольная)'),
+                                            ],
+                                          ),
+                                        ),
+                                        PopupMenuItem<AreaType>(
+                                          value: AreaType.rectangle,
+                                          child: Row(
+                                            children: [
+                                              Icon(_currentAreaType == AreaType.rectangle ? Icons.check : Icons.check_box_outline_blank,
+                                                  size: 20, color: _currentAreaType == AreaType.rectangle ? Colors.blue : Colors.grey),
+                                              const SizedBox(width: 10),
+                                              const Text('Прямоугольник'),
+                                            ],
+                                          ),
+                                        ),
+                                        PopupMenuItem<AreaType>(
+                                          value: AreaType.circle,
+                                          child: Row(
+                                            children: [
+                                              Icon(_currentAreaType == AreaType.circle ? Icons.check : Icons.check_box_outline_blank,
+                                                  size: 20, color: _currentAreaType == AreaType.circle ? Colors.blue : Colors.grey),
+                                              const SizedBox(width: 10),
+                                              const Text('Круг'),
+                                            ],
+                                          ),
+                                        ),
+                                        PopupMenuItem<AreaType>(
+                                          value: AreaType.ellipse,
+                                          child: Row(
+                                            children: [
+                                              Icon(_currentAreaType == AreaType.ellipse ? Icons.check : Icons.check_box_outline_blank,
+                                                  size: 20, color: _currentAreaType == AreaType.ellipse ? Colors.blue : Colors.grey),
+                                              const SizedBox(width: 10),
+                                              const Text('Овал'),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ).then((AreaType? t) {
+                                      if (t != null && t != _currentAreaType) {
+                                        setState(() {
+                                          _currentAreaType = t;
+                                          _areaPoints = [];
+                                        });
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text('Режим площади: ${{
+                                              AreaType.freehand: 'Кривая',
+                                              AreaType.rectangle: 'Прямоугольник',
+                                              AreaType.circle: 'Круг',
+                                              AreaType.ellipse: 'Овал',
+                                            }[_currentAreaType]}'),
+                                            duration: const Duration(seconds: 2),
+                                          ),
+                                        );
+                                      }
+                                    });
+                                  },
+                                  child: Tooltip(
+                                    message: 'Площадь (${{
+                                      AreaType.freehand: 'кривая',
+                                      AreaType.rectangle: 'прямоугольник',
+                                      AreaType.circle: 'круг',
+                                      AreaType.ellipse: 'овал',
+                                    }[_currentAreaType]})\nПКМ: выбрать режим',
+                                    child: IconButton(
+                                      icon: const Icon(Icons.crop_free),
+                                      color: _currentTool == ToolMode.area ? Colors.lightBlueAccent : Colors.white,
+                                      onPressed: () => _switchTool(ToolMode.area),
+                                    ),
+                                  ),
                                 ),
                                 const SizedBox(height: 15),
                                 IconButton(
@@ -4442,6 +5042,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                       _textAnnotations.clear(); // Очищаем аннотации
                                       _arrowAnnotations.clear(); // Очищаем стрелки
                                       _arrowPoints.clear(); // Очищаем точки стрелок
+                                      _completedAreas.clear(); // Очищаем площади
+                                      _areaPoints.clear();
+                                      _selectedAreaIndex = null;
+                                      _isDraggingArea = false;
+                                      _areaDragOffset = null;
+                                      _areaDragOffsetRelative = null;
                                       _actionHistory.clear(); // Очищаем историю действий
                                       _transformationController.value = Matrix4.identity();
                                     });
@@ -4549,6 +5155,44 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                     _rulerPoints.clear();
                                                     _rulerPoints.add(sceneOffset);
                                                   });
+                                                } else if (_currentTool == ToolMode.area && event.buttons == 1) {
+                                                  if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                    _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                    _matrixCacheValid = true;
+                                                  }
+                                                  final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                  final bool ctrlPressed = RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlLeft) ||
+                                                                           RawKeyboard.instance.keysPressed.contains(LogicalKeyboardKey.controlRight);
+                                                  final areaIndex = _getAreaAtPoint(sceneOffset);
+                                                  final canvasSize = _getCanvasSize();
+                                                  final relativeOffset = canvasSize.width > 0 && canvasSize.height > 0
+                                                      ? _sceneToRelativeCoordinates(sceneOffset, canvasSize)
+                                                      : null;
+
+                                                  if (areaIndex != null && _areaPoints.isEmpty && !ctrlPressed) {
+                                                    setState(() {
+                                                      _selectedAreaIndex = areaIndex;
+                                                      _isDraggingArea = true;
+                                                      _areaDragOffset = sceneOffset;
+                                                      _areaDragOffsetRelative = relativeOffset;
+                                                      _isDragging = true;
+                                                      _hasMeasurementNearPointer = true;
+                                                    });
+                                                  } else {
+                                                    setState(() {
+                                                      _isDragging = true;
+                                                      _selectedAreaIndex = null;
+                                                      _areaPoints.clear();
+                                                      _areaDragOffset = null;
+                                                      _areaDragOffsetRelative = null;
+                                                      if (_currentAreaType == AreaType.freehand) {
+                                                        _areaPoints.add(sceneOffset);
+                                                      } else {
+                                                        _areaPoints.add(sceneOffset);
+                                                        _areaPoints.add(sceneOffset);
+                                                      }
+                                                    });
+                                                  }
                                                 } else if (_currentTool == ToolMode.arrow && event.buttons == 1) {
                                                   // Обрабатываем начало создания стрелки (ЛКМ)
                                                   if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
@@ -4585,7 +5229,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                   }
                                                   
                                                   // Если есть измерение рядом, начинаем перетаскивание напрямую через Listener
-                                                  if (hasMeasurement && _rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
+                                                  if (hasMeasurement && _rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty && _areaPoints.isEmpty) {
                                                     if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
                                                       _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
                                                       _matrixCacheValid = true;
@@ -4612,6 +5256,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                         _selectedAngleIndex = null;
                                                         _selectedTextIndex = null;
                                                         _selectedArrowIndex = null;
+                                                        _selectedAreaIndex = null;
                                                         _isDraggingRuler = true;
                                                         _dragOffset = sceneOffset;
                                                         _hasMeasurementNearPointer = true;
@@ -4636,6 +5281,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                         _selectedRulerIndex = null;
                                                         _selectedTextIndex = null;
                                                         _selectedArrowIndex = null;
+                                                        _selectedAreaIndex = null;
                                                         _isDraggingAngle = true;
                                                         _dragOffset = sceneOffset;
                                                         _hasMeasurementNearPointer = true;
@@ -4685,6 +5331,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                     }
                                                     
                                                     // Проверяем и начинаем перетаскивание текстовых аннотаций
+                                                    if (_selectedAreaIndex != null && _isPointInsideArea(sceneOffset, _selectedAreaIndex!)) {
+                                                      final canvasSize = _getCanvasSize();
+                                                      final relativePoint = _sceneToRelativeCoordinates(sceneOffset, canvasSize);
+                                                      setState(() {
+                                                        _isDraggingArea = true;
+                                                        _areaDragOffset = sceneOffset;
+                                                        _areaDragOffsetRelative = relativePoint;
+                                                        _hasMeasurementNearPointer = true;
+                                                      });
+                                                      return;
+                                                    }
+
+                                                    final areaIndex = _getAreaAtPoint(sceneOffset);
+                                                    if (areaIndex != null) {
+                                                      final canvasSize = _getCanvasSize();
+                                                      final relativePoint = _sceneToRelativeCoordinates(sceneOffset, canvasSize);
+                                                      setState(() {
+                                                        _selectedAreaIndex = areaIndex;
+                                                        _selectedRulerIndex = null;
+                                                        _selectedAngleIndex = null;
+                                                        _selectedTextIndex = null;
+                                                        _selectedArrowIndex = null;
+                                                        _isDraggingArea = true;
+                                                        _areaDragOffset = sceneOffset;
+                                                        _areaDragOffsetRelative = relativePoint;
+                                                        _hasMeasurementNearPointer = true;
+                                                      });
+                                                      return;
+                                                    }
+                                                    
+                                                    // Проверяем и начинаем перетаскивание текстовых аннотаций
                                                     if (_selectedTextIndex != null && _isPointOnTextDragHandle(sceneOffset, _selectedTextIndex!)) {
                                                       setState(() {
                                                         _isDraggingText = true;
@@ -4701,6 +5378,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                         _selectedRulerIndex = null;
                                                         _selectedAngleIndex = null;
                                                         _selectedArrowIndex = null;
+                                                        _selectedAreaIndex = null;
                                                         _isDraggingText = true;
                                                         _dragOffset = sceneOffset;
                                                         _hasMeasurementNearPointer = true;
@@ -4725,6 +5403,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                         _selectedRulerIndex = null;
                                                         _selectedAngleIndex = null;
                                                         _selectedTextIndex = null;
+                                                        _selectedAreaIndex = null;
                                                         _isDraggingArrow = true;
                                                         _dragOffset = sceneOffset;
                                                         _hasMeasurementNearPointer = true;
@@ -4928,14 +5607,69 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                   setState(() {
                                                     _isRightButtonPressed = false;
                                                   });
-                                                } else if (_isDraggingRuler || _isDraggingAngle || _isDraggingText || _isDraggingArrow) {
+                                                } else if (_currentTool == ToolMode.area && _areaPoints.isNotEmpty) {
+                                                  // Завершаем создание области
+                                                  if (_areaPoints.length >= 2 || (_currentAreaType == AreaType.freehand && _areaPoints.length >= 3)) {
+                                                    final canvasSize = _getCanvasSize();
+                                                    AreaShape? shape;
+                                                    switch (_currentAreaType) {
+                                                      case AreaType.freehand:
+                                                        final relPoints = _areaPoints.map((p) => _sceneToRelativeCoordinates(p, canvasSize)).toList();
+                                                        shape = AreaShape.freehand(points: relPoints);
+                                                        break;
+                                                      case AreaType.rectangle:
+                                                      case AreaType.ellipse:
+                                                        final p1 = _sceneToRelativeCoordinates(_areaPoints[0], canvasSize);
+                                                        final p2 = _sceneToRelativeCoordinates(_areaPoints[1], canvasSize);
+                                                        final rect = Rect.fromPoints(p1, p2);
+                                                        shape = _currentAreaType == AreaType.rectangle
+                                                            ? AreaShape.rectangle(bounds: rect)
+                                                            : AreaShape.ellipse(bounds: rect);
+                                                        break;
+                                                      case AreaType.circle:
+                                                        final c = _sceneToRelativeCoordinates(_areaPoints[0], canvasSize);
+                                                        final end = _sceneToRelativeCoordinates(_areaPoints[1], canvasSize);
+                                                        final radiusRel = (end - c).distance;
+                                                        shape = AreaShape.circle(center: c, radius: radiusRel);
+                                                        break;
+                                                    }
+                                                    if (shape != null) {
+                                                      final updatedAreas = List.of(_completedAreas)..add(shape);
+                                                      setState(() {
+                                                        _completedAreas = updatedAreas;
+                                                        _selectedAreaIndex = updatedAreas.length - 1;
+                                                        _selectedRulerIndex = null;
+                                                        _selectedAngleIndex = null;
+                                                        _selectedTextIndex = null;
+                                                        _selectedArrowIndex = null;
+                                                        _areaPoints.clear();
+                                                        _isDragging = false;
+                                                        _isDraggingArea = false;
+                                                        _areaDragOffset = null;
+                                                        _areaDragOffsetRelative = null;
+                                                      });
+                                                      _addToHistory(ActionType.areaAdded, null);
+                                                    }
+                                                  } else {
+                                                    setState(() {
+                                                      _areaPoints.clear();
+                                                      _isDragging = false;
+                                                      _isDraggingArea = false;
+                                                      _areaDragOffset = null;
+                                                      _areaDragOffsetRelative = null;
+                                                    });
+                                                  }
+                                                } else if (_isDraggingRuler || _isDraggingAngle || _isDraggingText || _isDraggingArrow || _isDraggingArea) {
                                                   // Завершаем перетаскивание
                                                   setState(() {
                                                     _isDraggingRuler = false;
                                                     _isDraggingAngle = false;
                                                     _isDraggingText = false;
                                                     _isDraggingArrow = false;
+                                                    _isDraggingArea = false;
                                                     _dragOffset = null;
+                                                    _areaDragOffset = null;
+                                                    _areaDragOffsetRelative = null;
                                                     _hasMeasurementNearPointer = false;
                                                   });
                                                 }
@@ -5005,6 +5739,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                       }
                                                     } else if (_rulerPoints.length == 2) {
                                                       _rulerPoints[1] = sceneOffset;
+                                                    }
+                                                  });
+                                                } else if (_currentTool == ToolMode.area && _areaPoints.isNotEmpty) {
+                                                  // Обновляем фигуру площади
+                                                  if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                    _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                    _matrixCacheValid = true;
+                                                  }
+                                                  final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                  setState(() {
+                                                    if (_currentAreaType == AreaType.freehand) {
+                                                      final last = _areaPoints.isNotEmpty ? _areaPoints.last : null;
+                                                      if (last == null || (sceneOffset - last).distance > 1.5) {
+                                                        _areaPoints.add(sceneOffset);
+                                                      }
+                                                    } else {
+                                                      // Для прямоугольника/эллипса/круга обновляем вторую точку
+                                                      if (_areaPoints.length == 1) {
+                                                        _areaPoints.add(sceneOffset);
+                                                      } else {
+                                                        _areaPoints[1] = sceneOffset;
+                                                      }
                                                     }
                                                   });
                                                 } else if (_currentTool == ToolMode.arrow && _arrowPoints.isNotEmpty) {
@@ -5129,6 +5885,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                     });
                                                     return;
                                                   }
+
+                                                  if (_isDraggingArea &&
+                                                      _selectedAreaIndex != null &&
+                                                      _areaDragOffset != null &&
+                                                      _areaDragOffsetRelative != null) {
+                                                    if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                      _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                      _matrixCacheValid = true;
+                                                    }
+                                                    final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                    final canvasSize = _getCanvasSize();
+                                                    if (canvasSize.width > 0 && canvasSize.height > 0) {
+                                                      final relativePoint = _sceneToRelativeCoordinates(sceneOffset, canvasSize);
+                                                      final deltaRelative = Offset(
+                                                        relativePoint.dx - _areaDragOffsetRelative!.dx,
+                                                        relativePoint.dy - _areaDragOffsetRelative!.dy,
+                                                      );
+                                                      setState(() {
+                                                        final area = _completedAreas[_selectedAreaIndex!];
+                                                        _completedAreas[_selectedAreaIndex!] = area.translated(deltaRelative);
+                                                        _areaDragOffset = sceneOffset;
+                                                        _areaDragOffsetRelative = relativePoint;
+                                                      });
+                                                    }
+                                                    return;
+                                                  }
                                                   
                                                   // Обрабатываем перетаскивание текстовых аннотаций
                                                   if (_isDraggingText && _selectedTextIndex != null && _dragOffset != null) {
@@ -5185,11 +5967,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               onPanUpdate: _handlePanUpdate,
                                               onPanEnd: _handlePanEnd,
                                               child: AbsorbPointer(
-                                                absorbing: _isDraggingRuler || _isDraggingAngle || _isDraggingText || _isDraggingArrow,
+                                                absorbing: _isDraggingRuler || _isDraggingAngle || _isDraggingText || _isDraggingArrow || _isDraggingArea,
                                                 child: InteractiveViewer(
                                                   transformationController: _transformationController,
-                                                  panEnabled: (_currentTool == ToolMode.pan || (_currentTool == ToolMode.brightness && _isRightButtonPressed)) && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingText && !_isDraggingArrow && !_hasMeasurementNearPointer && _brightnessDragStart == null,
-                                                  scaleEnabled: (_currentTool == ToolMode.pan || _currentTool == ToolMode.brightness) && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingText && !_isDraggingArrow && !_hasMeasurementNearPointer && _brightnessDragStart == null,
+                                                  panEnabled: (_currentTool == ToolMode.pan || (_currentTool == ToolMode.brightness && _isRightButtonPressed)) && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingText && !_isDraggingArrow && !_isDraggingArea && !_hasMeasurementNearPointer && _brightnessDragStart == null,
+                                                  scaleEnabled: (_currentTool == ToolMode.pan || _currentTool == ToolMode.brightness) && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingText && !_isDraggingArrow && !_isDraggingArea && !_hasMeasurementNearPointer && _brightnessDragStart == null,
                                                 minScale: 0.1, maxScale: 8.0,
                                                 child: RepaintBoundary(
                                                   key: _captureKey,
@@ -5284,6 +6066,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                       currentAngleType: _currentAngleType,
                                                     ),
                                                     child: Container(), // Пустой контейнер для предотвращения ошибок
+                                                  ),
+                                                  CustomPaint(
+                                                    painter: AreaPainter(
+                                                      currentPoints: List.of(_areaPoints),
+                                                      currentType: _currentAreaType,
+                                                      completedAreas: List.of(_completedAreas),
+                                                      pixelSpacingRow: _pixelSpacingRow,
+                                                      pixelSpacingCol: _pixelSpacingRow,
+                                                      imageSize: _decodedImage != null 
+                                                        ? Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble())
+                                                        : null,
+                                                      rotationAngle: _rotationAngle,
+                                                      selectedIndex: _selectedAreaIndex,
+                                                    ),
+                                                    child: Container(),
                                                   ),
                                                   CustomPaint(
                                                     painter: AnnotationPainter(

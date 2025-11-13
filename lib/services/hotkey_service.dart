@@ -62,6 +62,9 @@ class HotkeyService {
       case 'annotation':
         expectedCombination = _hotkeySettings.annotationKey;
         break;
+      case 'area':
+        expectedCombination = _hotkeySettings.areaKey;
+        break;
       case 'undo':
         expectedCombination = _hotkeySettings.undoKey;
         break;
@@ -104,6 +107,7 @@ class HotkeyService {
     if (_hotkeySettings.invertKey == keyString) return 'Инверсия';
     if (_hotkeySettings.rotateKey == keyString) return 'Поворот';
     if (_hotkeySettings.annotationKey == keyString) return 'Аннотации';
+    if (_hotkeySettings.areaKey == keyString) return 'Площадь';
     if (_hotkeySettings.undoKey == keyString) return 'Отмена';
     // Для сброса проверяем фиксированную клавишу F5
     if (keyString == 'F5') return 'Сброс';
