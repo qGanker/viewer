@@ -569,8 +569,9 @@ class RulerLine {
   final Offset start;  // Относительные координаты (0.0-1.0)
   final Offset end;    // Относительные координаты (0.0-1.0)
   final double pixelSpacing;
+  final Offset? textPosition; // Позиция текста (относительные координаты 0.0-1.0), null = использовать центр линии
   
-  RulerLine({required this.start, required this.end, required this.pixelSpacing});
+  RulerLine({required this.start, required this.end, required this.pixelSpacing, this.textPosition});
   
   // Преобразует относительные координаты в абсолютные для заданного размера
   Offset getAbsoluteStart(Size size) {
@@ -579,6 +580,11 @@ class RulerLine {
   
   Offset getAbsoluteEnd(Size size) {
     return Offset(end.dx * size.width, end.dy * size.height);
+  }
+  
+  Offset? getAbsoluteTextPosition(Size size) {
+    if (textPosition == null) return null;
+    return Offset(textPosition!.dx * size.width, textPosition!.dy * size.height);
   }
   
   double getDistance(Size size) {
@@ -601,6 +607,7 @@ class AngleMeasurement {
   final AngleType type; // Тип угла (обычный или Кобба)
   final Offset? line1End; // Конечная точка первой линии (для угла Кобба)
   final Offset? line2End; // Конечная точка второй линии (для угла Кобба)
+  final Offset? textPosition; // Позиция текста (относительные координаты 0.0-1.0), null = использовать вершину
   
   AngleMeasurement({
     required this.vertex,
@@ -609,6 +616,7 @@ class AngleMeasurement {
     this.type = AngleType.normal,
     this.line1End,
     this.line2End,
+    this.textPosition,
   });
   
   // Преобразует относительные координаты в абсолютные для заданного размера
@@ -632,6 +640,11 @@ class AngleMeasurement {
   Offset? getAbsoluteLine2End(Size size) {
     if (line2End == null) return null;
     return Offset(line2End!.dx * size.width, line2End!.dy * size.height);
+  }
+  
+  Offset? getAbsoluteTextPosition(Size size) {
+    if (textPosition == null) return null;
+    return Offset(textPosition!.dx * size.width, textPosition!.dy * size.height);
   }
   
   // Вычисление угла в градусах для заданного размера
@@ -821,6 +834,12 @@ class RulerPainter extends CustomPainter {
             : (end - start).distance;
     final realDistanceMm = pixelDistance * safePixelSpacing;
     
+    // Определяем позицию текста: используем сохраненную или вычисляем начальную
+    final lineCenter = Offset((start.dx + end.dx) / 2, (start.dy + end.dy) / 2);
+    final textPosition = line != null && line.textPosition != null
+        ? line.getAbsoluteTextPosition(size)!
+        : Offset(lineCenter.dx + 15, lineCenter.dy);
+    
     // Рисуем текст с расстоянием и номером линии
     final textPainter = TextPainter(
       text: TextSpan(
@@ -834,11 +853,29 @@ class RulerPainter extends CustomPainter {
       textDirection: TextDirection.ltr,
     )..layout();
     
-    // Позиционируем текст
+    // Позиционируем текст (центр квадратика)
     final textOffset = Offset(
-      (start.dx + end.dx) / 2 + 15, 
-      (start.dy + end.dy) / 2 - textPainter.height / 2
+      textPosition.dx - textPainter.width / 2,
+      textPosition.dy - textPainter.height / 2
     );
+    
+    // Рисуем квадратик с сероватым фоном
+    final padding = 6.0;
+    final bgRect = Rect.fromLTWH(
+      textOffset.dx - padding,
+      textOffset.dy - padding,
+      textPainter.width + padding * 2,
+      textPainter.height + padding * 2,
+    );
+    canvas.drawRect(bgRect, Paint()..color = Colors.grey.withOpacity(0.7));
+    canvas.drawRect(bgRect, Paint()..color = Colors.grey.withOpacity(0.9)..style = PaintingStyle.stroke..strokeWidth = 1.0);
+    
+    // Рисуем пунктирную линию от текста до центра линии
+    final dashPaint = Paint()
+      ..color = Colors.yellow.withOpacity(0.6)
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+    _drawDashedLine(canvas, lineCenter, textPosition, dashPaint);
     
     textPainter.paint(canvas, textOffset);
     
@@ -898,6 +935,29 @@ class RulerPainter extends CustomPainter {
       );
     }
   }
+  // Вспомогательная функция для рисования пунктирной линии
+  void _drawDashedLine(Canvas canvas, Offset start, Offset end, Paint paint) {
+    const dashWidth = 5.0;
+    const dashSpace = 3.0;
+    
+    final delta = end - start;
+    final distance = delta.distance;
+    if (distance == 0) return;
+    final normalizedDelta = delta / distance;
+    
+    double currentDistance = 0;
+    while (currentDistance < distance) {
+      final segmentStart = start + normalizedDelta * currentDistance;
+      final nextDistance = currentDistance + dashWidth;
+      final segmentEnd = nextDistance > distance
+          ? end
+          : start + normalizedDelta * nextDistance;
+      
+      canvas.drawLine(segmentStart, segmentEnd, paint);
+      currentDistance = nextDistance + dashSpace;
+    }
+  }
+  
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
     // Для надежности всегда перерисовываем, так как списки могут мутировать по месту
@@ -956,9 +1016,9 @@ class AnglePainter extends CustomPainter {
         final angleDeg = angle.getAngleDegrees(angleSize);
         
         if (angle.type == AngleType.cobb && absLine1End != null && absLine2End != null) {
-          _drawCobbAngle(canvas, absPoint1, absLine1End, absPoint2, absLine2End, paint, fillPaint, i + 1, angleDeg, isSelected);
+          _drawCobbAngle(canvas, absPoint1, absLine1End, absPoint2, absLine2End, paint, fillPaint, i + 1, angleDeg, isSelected, angle, size);
         } else {
-          _drawAngle(canvas, absVertex, absPoint1, absPoint2, paint, fillPaint, i + 1, angleDeg, isSelected);
+          _drawAngle(canvas, absVertex, absPoint1, absPoint2, paint, fillPaint, i + 1, angleDeg, isSelected, angle, size);
         }
       }
       
@@ -998,7 +1058,7 @@ class AnglePainter extends CustomPainter {
               angleDeg = acos(cosAngle) * 180 / pi;
             }
             
-            _drawAngle(canvas, vertex, point1, point2, paint, fillPaint, completedAngles.length + 1, angleDeg, false);
+            _drawAngle(canvas, vertex, point1, point2, paint, fillPaint, completedAngles.length + 1, angleDeg, false, null, size);
           }
         } else {
           // Угол Кобба: 4 точки
@@ -1039,7 +1099,7 @@ class AnglePainter extends CustomPainter {
               angleDeg = angle > 90 ? 180 - angle : angle;
             }
             
-            _drawCobbAngle(canvas, l1Start, l1End, l2Start, l2End, paint, fillPaint, completedAngles.length + 1, angleDeg, false);
+            _drawCobbAngle(canvas, l1Start, l1End, l2Start, l2End, paint, fillPaint, completedAngles.length + 1, angleDeg, false, null, size);
           }
         }
       }
@@ -1053,7 +1113,7 @@ class AnglePainter extends CustomPainter {
     }
   }
   
-  void _drawAngle(Canvas canvas, Offset vertex, Offset point1, Offset point2, Paint paint, Paint fillPaint, int angleNumber, double angleDegrees, bool isSelected) {
+  void _drawAngle(Canvas canvas, Offset vertex, Offset point1, Offset point2, Paint paint, Paint fillPaint, int angleNumber, double angleDegrees, bool isSelected, AngleMeasurement? angle, Size size) {
     // Рисуем два луча от вершины (тонкие)
     canvas.drawLine(vertex, point1, paint);
     canvas.drawLine(vertex, point2, paint);
@@ -1087,6 +1147,11 @@ class AnglePainter extends CustomPainter {
     canvas.drawCircle(vertex, 5, fillPaint);
     canvas.drawCircle(vertex, 5, Paint()..color = Colors.black..strokeWidth = 1.0);
     
+    // Определяем позицию текста: используем сохраненную или вычисляем начальную
+    final textPosition = angle != null && angle.textPosition != null
+        ? angle.getAbsoluteTextPosition(size)!
+        : Offset(vertex.dx + 20, vertex.dy);
+    
     // Рисуем текст с углом
     final textPainter = TextPainter(
       text: TextSpan(
@@ -1100,11 +1165,29 @@ class AnglePainter extends CustomPainter {
       textDirection: TextDirection.ltr,
     )..layout();
     
-    // Позиционируем текст рядом с вершиной
+    // Позиционируем текст (центр квадратика)
     final textOffset = Offset(
-      vertex.dx + 20,
-      vertex.dy - textPainter.height / 2,
+      textPosition.dx - textPainter.width / 2,
+      textPosition.dy - textPainter.height / 2,
     );
+    
+    // Рисуем квадратик с сероватым фоном
+    final padding = 6.0;
+    final bgRect = Rect.fromLTWH(
+      textOffset.dx - padding,
+      textOffset.dy - padding,
+      textPainter.width + padding * 2,
+      textPainter.height + padding * 2,
+    );
+    canvas.drawRect(bgRect, Paint()..color = Colors.grey.withOpacity(0.7));
+    canvas.drawRect(bgRect, Paint()..color = Colors.grey.withOpacity(0.9)..style = PaintingStyle.stroke..strokeWidth = 1.0);
+    
+    // Рисуем пунктирную линию от текста до вершины
+    final dashPaint = Paint()
+      ..color = Colors.cyan.withOpacity(0.6)
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+    _drawDashedLine(canvas, vertex, textPosition, dashPaint);
     
     textPainter.paint(canvas, textOffset);
     
@@ -1213,7 +1296,7 @@ class AnglePainter extends CustomPainter {
     return [point1, point2];
   }
   
-  void _drawCobbAngle(Canvas canvas, Offset line1Start, Offset line1End, Offset line2Start, Offset line2End, Paint paint, Paint fillPaint, int angleNumber, double angleDegrees, bool isSelected) {
+  void _drawCobbAngle(Canvas canvas, Offset line1Start, Offset line1End, Offset line2Start, Offset line2End, Paint paint, Paint fillPaint, int angleNumber, double angleDegrees, bool isSelected, AngleMeasurement? angle, Size size) {
     // Рисуем две линии
     canvas.drawLine(line1Start, line1End, paint..strokeWidth = 2.0);
     canvas.drawLine(line2Start, line2End, paint..strokeWidth = 2.0);
@@ -1240,6 +1323,15 @@ class AnglePainter extends CustomPainter {
     canvas.drawCircle(line2End, 4, fillPaint);
     canvas.drawCircle(line2End, 4, Paint()..color = Colors.black..strokeWidth = 1.0);
     
+    // Определяем позицию текста: используем сохраненную или вычисляем начальную
+    final midPoint = Offset(
+      (line1Start.dx + line1End.dx + line2Start.dx + line2End.dx) / 4,
+      (line1Start.dy + line1End.dy + line2Start.dy + line2End.dy) / 4,
+    );
+    final textPosition = angle != null && angle.textPosition != null
+        ? angle.getAbsoluteTextPosition(size)!
+        : Offset(midPoint.dx + 20, midPoint.dy);
+    
     // Рисуем текст с углом Кобба
     final textPainter = TextPainter(
       text: TextSpan(
@@ -1253,16 +1345,29 @@ class AnglePainter extends CustomPainter {
       textDirection: TextDirection.ltr,
     )..layout();
     
-    // Позиционируем текст между двумя линиями
-    final midPoint = Offset(
-      (line1Start.dx + line1End.dx + line2Start.dx + line2End.dx) / 4,
-      (line1Start.dy + line1End.dy + line2Start.dy + line2End.dy) / 4,
+    // Позиционируем текст (центр квадратика)
+    final textOffset = Offset(
+      textPosition.dx - textPainter.width / 2,
+      textPosition.dy - textPainter.height / 2,
     );
     
-    final textOffset = Offset(
-      midPoint.dx + 20,
-      midPoint.dy - textPainter.height / 2,
+    // Рисуем квадратик с сероватым фоном
+    final padding = 6.0;
+    final bgRect = Rect.fromLTWH(
+      textOffset.dx - padding,
+      textOffset.dy - padding,
+      textPainter.width + padding * 2,
+      textPainter.height + padding * 2,
     );
+    canvas.drawRect(bgRect, Paint()..color = Colors.grey.withOpacity(0.7));
+    canvas.drawRect(bgRect, Paint()..color = Colors.grey.withOpacity(0.9)..style = PaintingStyle.stroke..strokeWidth = 1.0);
+    
+    // Рисуем пунктирную линию от текста до центра между линиями
+    final dashPaint2 = Paint()
+      ..color = Colors.cyan.withOpacity(0.6)
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+    _drawDashedLine(canvas, midPoint, textPosition, dashPaint2);
     
     textPainter.paint(canvas, textOffset);
     
@@ -1781,6 +1886,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int? _selectedArrowIndex; // Индекс выбранной стрелки
   bool _isDraggingRuler = false; // Флаг перетаскивания линейки
   bool _isDraggingAngle = false; // Флаг перетаскивания угла
+  bool _isDraggingRulerText = false; // Флаг перетаскивания текста линейки
+  bool _isDraggingAngleText = false; // Флаг перетаскивания текста угла
   int? _selectedAreaIndex; // Индекс выбранной области
   bool _isDraggingArea = false;
   Offset? _areaDragOffset;
@@ -2608,6 +2715,131 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return dragHandleRect.contains(point);
   }
   
+  // Проверяет, находится ли точка на тексте линейки
+  bool _isPointOnRulerText(Offset point, int rulerIndex) {
+    if (rulerIndex < 0 || rulerIndex >= _completedRulerLines.length) return false;
+    final canvasSize = _getCanvasSize();
+    final line = _completedRulerLines[rulerIndex];
+    
+    // Применяем обратное преобразование поворота к точке, если есть поворот
+    Offset transformedPoint = point;
+    if (_rotationAngle != 0.0) {
+      final center = Offset(canvasSize.width / 2, canvasSize.height / 2);
+      final angleRad = -_rotationAngle * 3.14159 / 180; // Обратный поворот
+      final cosA = cos(angleRad);
+      final sinA = sin(angleRad);
+      final dx = point.dx - center.dx;
+      final dy = point.dy - center.dy;
+      transformedPoint = Offset(
+        center.dx + dx * cosA - dy * sinA,
+        center.dy + dx * sinA + dy * cosA,
+      );
+    }
+    
+    final absStart = line.getAbsoluteStart(canvasSize);
+    final absEnd = line.getAbsoluteEnd(canvasSize);
+    
+    // Определяем позицию текста
+    final lineCenter = Offset((absStart.dx + absEnd.dx) / 2, (absStart.dy + absEnd.dy) / 2);
+    final textPosition = line.textPosition != null
+        ? line.getAbsoluteTextPosition(canvasSize)!
+        : Offset(lineCenter.dx + 15, lineCenter.dy);
+    
+    // Создаем TextPainter для вычисления размера текста
+    final pixelDistance = line.getDistance(canvasSize);
+    final realDistanceMm = pixelDistance * line.pixelSpacing;
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: 'L${rulerIndex + 1}: ${realDistanceMm.toStringAsFixed(2)} mm\n(${pixelDistance.toStringAsFixed(1)} px)',
+        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    
+    // Проверяем, попадает ли точка в квадратик с текстом
+    // Используем тот же padding, что и при рисовании (6.0)
+    final padding = 6.0;
+    final textOffset = Offset(
+      textPosition.dx - textPainter.width / 2,
+      textPosition.dy - textPainter.height / 2,
+    );
+    final bgRect = Rect.fromLTWH(
+      textOffset.dx - padding,
+      textOffset.dy - padding,
+      textPainter.width + padding * 2,
+      textPainter.height + padding * 2,
+    );
+    
+    final isInside = bgRect.contains(transformedPoint);
+    if (isInside) {
+      print("=== _isPointOnRulerText: точка $point (преобразована в $transformedPoint) попадает в квадратик $bgRect для линейки $rulerIndex, textPosition=$textPosition, rotationAngle=$_rotationAngle");
+    }
+    return isInside;
+  }
+  
+  // Проверяет, находится ли точка на тексте угла
+  bool _isPointOnAngleText(Offset point, int angleIndex) {
+    if (angleIndex < 0 || angleIndex >= _completedAngles.length) return false;
+    final canvasSize = _getCanvasSize();
+    final angle = _completedAngles[angleIndex];
+    
+    // Определяем позицию текста
+    Offset textPosition;
+    if (angle.type == AngleType.cobb) {
+      final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+      final absLine1End = angle.getAbsoluteLine1End(canvasSize);
+      final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+      final absLine2End = angle.getAbsoluteLine2End(canvasSize);
+      if (absLine1End == null || absLine2End == null) return false;
+      final midPoint = Offset(
+        (absPoint1.dx + absLine1End.dx + absPoint2.dx + absLine2End.dx) / 4,
+        (absPoint1.dy + absLine1End.dy + absPoint2.dy + absLine2End.dy) / 4,
+      );
+      textPosition = angle.textPosition != null
+          ? angle.getAbsoluteTextPosition(canvasSize)!
+          : Offset(midPoint.dx + 20, midPoint.dy);
+    } else {
+      final vertex = angle.getAbsoluteVertex(canvasSize);
+      textPosition = angle.textPosition != null
+          ? angle.getAbsoluteTextPosition(canvasSize)!
+          : Offset(vertex.dx + 20, vertex.dy);
+    }
+    
+    // Создаем TextPainter для вычисления размера текста
+    // Используем размер canvas для вычисления угла, так как angleSize нужен только для вычисления угла
+    final angleSize = canvasSize;
+    final angleDeg = angle.getAngleDegrees(angleSize);
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: angle.type == AngleType.cobb 
+            ? 'Cobb ∠${angleIndex + 1}: ${angleDeg.toStringAsFixed(1)}°'
+            : '∠${angleIndex + 1}: ${angleDeg.toStringAsFixed(1)}°',
+        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    
+    // Проверяем, попадает ли точка в квадратик с текстом
+    // Увеличиваем хитбокс для более удобного клика
+    final padding = 10.0; // Увеличено с 6.0 для более удобного клика
+    final textOffset = Offset(
+      textPosition.dx - textPainter.width / 2,
+      textPosition.dy - textPainter.height / 2,
+    );
+    final bgRect = Rect.fromLTWH(
+      textOffset.dx - padding,
+      textOffset.dy - padding,
+      textPainter.width + padding * 2,
+      textPainter.height + padding * 2,
+    );
+    
+    final isInside = bgRect.contains(point);
+    if (isInside) {
+      print("=== _isPointOnAngleText: точка $point попадает в квадратик $bgRect для угла $angleIndex, textPosition=$textPosition");
+    }
+    return isInside;
+  }
+  
   // Вычисляет расстояние от точки до линии
   double _pointToLineDistance(Offset point, Offset lineStart, Offset lineEnd) {
     final A = point.dx - lineStart.dx;
@@ -3098,6 +3330,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, localPosition);
     
+    // СНАЧАЛА проверяем текст измерений (высший приоритет)
+    for (int i = 0; i < _completedRulerLines.length; i++) {
+      if (_isPointOnRulerText(sceneOffset, i)) {
+        return true;
+      }
+    }
+    for (int i = 0; i < _completedAngles.length; i++) {
+      if (_isPointOnAngleText(sceneOffset, i)) {
+        return true;
+      }
+    }
+    
     // Проверяем drag handles
     if (_selectedRulerIndex != null && 
         _selectedRulerIndex! >= 0 && 
@@ -3192,6 +3436,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return;
       }
       
+      // СНАЧАЛА проверяем перетаскивание текста линейки для ВСЕХ элементов (высший приоритет)
+      for (int i = 0; i < _completedRulerLines.length; i++) {
+        if (_isPointOnRulerText(sceneOffset, i)) {
+          print("=== PAN START: Найден текст линейки $i в точке $sceneOffset");
+          setState(() {
+            _selectedRulerIndex = i;
+            _selectedAngleIndex = null;
+            _selectedTextIndex = null;
+            _selectedArrowIndex = null;
+            _isDraggingRulerText = true;
+            _dragOffset = sceneOffset;
+            _hasMeasurementNearPointer = true; // Блокируем pan
+          });
+          return;
+        }
+      }
+      
+      // СНАЧАЛА проверяем перетаскивание текста угла для ВСЕХ элементов (высший приоритет)
+      for (int i = 0; i < _completedAngles.length; i++) {
+        if (_isPointOnAngleText(sceneOffset, i)) {
+          setState(() {
+            _selectedAngleIndex = i;
+            _selectedRulerIndex = null;
+            _selectedTextIndex = null;
+            _selectedArrowIndex = null;
+            _isDraggingAngleText = true;
+            _dragOffset = sceneOffset;
+            _hasMeasurementNearPointer = true; // Блокируем pan
+          });
+          return;
+        }
+      }
+      
       // Проверяем индикатор перетаскивания линейки
       if (_selectedRulerIndex != null && 
           _selectedRulerIndex! >= 0 && 
@@ -3220,7 +3497,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Перетаскивание работает в ЛЮБОМ режиме инструмента (включая pan), кроме режима создания новых измерений
     // Это гарантирует, что перетаскивание измерений имеет приоритет над стандартным перетаскиванием изображения
     if (_rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty) {
-      // Сначала проверяем перетаскивание линеек (даже если не выбраны)
+      // СНАЧАЛА проверяем перетаскивание текста линейки (высший приоритет - текст можно двигать отдельно)
+      for (int i = 0; i < _completedRulerLines.length; i++) {
+        if (_isPointOnRulerText(sceneOffset, i)) {
+          print("=== PAN START (PRIORITY 2): Найден текст линейки $i в точке $sceneOffset");
+          setState(() {
+            _selectedRulerIndex = i;
+            _selectedAngleIndex = null;
+            _selectedTextIndex = null;
+            _selectedArrowIndex = null;
+            _isDraggingRulerText = true;
+            _dragOffset = sceneOffset;
+            _hasMeasurementNearPointer = true; // Блокируем pan
+          });
+          return;
+        }
+      }
+      
+      // Затем проверяем перетаскивание линеек (даже если не выбраны)
       // Если линейка уже выбрана, проверяем её
       if (_selectedRulerIndex != null && 
           _selectedRulerIndex! >= 0 && 
@@ -3256,7 +3550,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return;
       }
       
-      // Проверяем перетаскивание углов (даже если не выбраны)
+      // СНАЧАЛА проверяем перетаскивание текста угла (высший приоритет - текст можно двигать отдельно)
+      for (int i = 0; i < _completedAngles.length; i++) {
+        if (_isPointOnAngleText(sceneOffset, i)) {
+          setState(() {
+            _selectedAngleIndex = i;
+            _selectedRulerIndex = null;
+            _selectedTextIndex = null;
+            _selectedArrowIndex = null;
+            _isDraggingAngleText = true;
+            _dragOffset = sceneOffset;
+            _hasMeasurementNearPointer = true; // Блокируем pan
+          });
+          return;
+        }
+      }
+      
+      // Затем проверяем перетаскивание углов (даже если не выбраны)
       // Если угол уже выбран, проверяем его (увеличенный хитбокс)
       if (_selectedAngleIndex != null) {
         final canvasSize = _getCanvasSize();
@@ -3397,6 +3707,119 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, details.localPosition);
     
+    // Обрабатываем перетаскивание текста линейки
+    if (_isDraggingRulerText && 
+        _selectedRulerIndex != null && 
+        _selectedRulerIndex! >= 0 && 
+        _selectedRulerIndex! < _completedRulerLines.length &&
+        _dragOffset != null) {
+      final canvasSize = _getCanvasSize();
+      // Преобразуем delta из scene coordinates в относительные координаты
+      final deltaScene = sceneOffset - _dragOffset!;
+      final deltaRelative = Offset(
+        deltaScene.dx / canvasSize.width,
+        deltaScene.dy / canvasSize.height,
+      );
+      setState(() {
+        final line = _completedRulerLines[_selectedRulerIndex!];
+        Offset currentTextPos;
+        if (line.textPosition != null) {
+          // Если textPosition уже установлен, используем его
+          currentTextPos = line.textPosition!;
+        } else {
+          // Если textPosition == null, вычисляем начальную позицию из абсолютных координат
+          final absStart = line.getAbsoluteStart(canvasSize);
+          final absEnd = line.getAbsoluteEnd(canvasSize);
+          final lineCenter = Offset((absStart.dx + absEnd.dx) / 2, (absStart.dy + absEnd.dy) / 2);
+          final absTextPos = Offset(lineCenter.dx + 15, lineCenter.dy);
+          // Преобразуем абсолютные координаты в относительные
+          currentTextPos = Offset(
+            absTextPos.dx / canvasSize.width,
+            absTextPos.dy / canvasSize.height,
+          );
+        }
+        _completedRulerLines[_selectedRulerIndex!] = RulerLine(
+          start: line.start,
+          end: line.end,
+          pixelSpacing: line.pixelSpacing,
+          textPosition: Offset(
+            currentTextPos.dx + deltaRelative.dx,
+            currentTextPos.dy + deltaRelative.dy,
+          ),
+        );
+        _dragOffset = sceneOffset;
+      });
+      return;
+    }
+    
+    // Обрабатываем перетаскивание текста угла
+    if (_isDraggingAngleText && 
+        _selectedAngleIndex != null && 
+        _selectedAngleIndex! >= 0 && 
+        _selectedAngleIndex! < _completedAngles.length &&
+        _dragOffset != null) {
+      final canvasSize = _getCanvasSize();
+      // Преобразуем delta из scene coordinates в относительные координаты
+      final deltaScene = sceneOffset - _dragOffset!;
+      final deltaRelative = Offset(
+        deltaScene.dx / canvasSize.width,
+        deltaScene.dy / canvasSize.height,
+      );
+      setState(() {
+        final angle = _completedAngles[_selectedAngleIndex!];
+        Offset currentTextPos;
+        if (angle.textPosition != null) {
+          // Если textPosition уже установлен, используем его
+          currentTextPos = angle.textPosition!;
+        } else {
+          // Если textPosition == null, вычисляем начальную позицию из абсолютных координат
+          if (angle.type == AngleType.cobb) {
+            final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+            final absLine1End = angle.getAbsoluteLine1End(canvasSize);
+            final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+            final absLine2End = angle.getAbsoluteLine2End(canvasSize);
+            if (absLine1End != null && absLine2End != null) {
+              final midPoint = Offset(
+                (absPoint1.dx + absLine1End.dx + absPoint2.dx + absLine2End.dx) / 4,
+                (absPoint1.dy + absLine1End.dy + absPoint2.dy + absLine2End.dy) / 4,
+              );
+              final absTextPos = Offset(midPoint.dx + 20, midPoint.dy);
+              // Преобразуем абсолютные координаты в относительные
+              currentTextPos = Offset(
+                absTextPos.dx / canvasSize.width,
+                absTextPos.dy / canvasSize.height,
+              );
+            } else {
+              currentTextPos = Offset(0.5, 0.5);
+            }
+          } else {
+            final absVertex = angle.getAbsoluteVertex(canvasSize);
+            final absTextPos = Offset(absVertex.dx + 20, absVertex.dy);
+            // Преобразуем абсолютные координаты в относительные
+            currentTextPos = Offset(
+              absTextPos.dx / canvasSize.width,
+              absTextPos.dy / canvasSize.height,
+            );
+          }
+        }
+        
+        _completedAngles[_selectedAngleIndex!] = AngleMeasurement(
+          vertex: angle.vertex,
+          point1: angle.point1,
+          point2: angle.point2,
+          type: angle.type,
+          line1End: angle.line1End,
+          line2End: angle.line2End,
+          textPosition: Offset(
+            currentTextPos.dx + deltaRelative.dx,
+            currentTextPos.dy + deltaRelative.dy,
+          ),
+        );
+        _dragOffset = sceneOffset;
+      });
+      return;
+    }
+    
     // Обрабатываем перетаскивание линеек
     if (_isDraggingRuler && 
         _selectedRulerIndex != null && 
@@ -3412,10 +3835,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
       setState(() {
         final line = _completedRulerLines[_selectedRulerIndex!];
+        // Сохраняем textPosition - если он установлен, текст остается на месте при перетаскивании линии
+        // Если textPosition == null, текст будет двигаться вместе с линией (используя вычисленную позицию)
         _completedRulerLines[_selectedRulerIndex!] = RulerLine(
           start: Offset(line.start.dx + deltaRelative.dx, line.start.dy + deltaRelative.dy),
           end: Offset(line.end.dx + deltaRelative.dx, line.end.dy + deltaRelative.dy),
           pixelSpacing: line.pixelSpacing,
+          textPosition: line.textPosition, // Сохраняем позицию текста - текст остается на месте
         );
         _dragOffset = sceneOffset;
       });
@@ -3447,6 +3873,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             line2End: angle.line2End != null
                 ? Offset(angle.line2End!.dx + deltaRelative.dx, angle.line2End!.dy + deltaRelative.dy)
                 : null,
+            textPosition: angle.textPosition, // Сохраняем позицию текста - текст остается на месте
           );
         } else {
           // Для обычного угла перемещаем 3 точки
@@ -3455,6 +3882,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             point1: Offset(angle.point1.dx + deltaRelative.dx, angle.point1.dy + deltaRelative.dy),
             point2: Offset(angle.point2.dx + deltaRelative.dx, angle.point2.dy + deltaRelative.dy),
             type: AngleType.normal,
+            textPosition: angle.textPosition, // Сохраняем позицию текста - текст остается на месте
           );
         }
         
@@ -3562,10 +3990,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     
     // ПРИОРИТЕТ 1: Сбрасываем флаги перетаскивания линеек, углов, текстовых аннотаций и стрелок
-    if (_isDraggingRuler || _isDraggingAngle || _isDraggingText || _isDraggingArrow) {
+    if (_isDraggingRuler || _isDraggingAngle || _isDraggingRulerText || _isDraggingAngleText || _isDraggingText || _isDraggingArrow) {
       setState(() {
         _isDraggingRuler = false;
         _isDraggingAngle = false;
+        _isDraggingRulerText = false;
+        _isDraggingAngleText = false;
         _isDraggingText = false;
         _isDraggingArrow = false;
         _dragOffset = null;
@@ -5190,6 +5620,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                     _isRightButtonPressed = true;
                                                   });
                                                 } else {
+                                                  // СНАЧАЛА проверяем перетаскивание текста (высший приоритет, независимо от hasMeasurement)
+                                                  if (_rulerPoints.isEmpty && _anglePoints.isEmpty && _arrowPoints.isEmpty && _areaPoints.isEmpty) {
+                                                    if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                      _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                      _matrixCacheValid = true;
+                                                    }
+                                                    final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                    
+                                                    // Проверяем перетаскивание текста линейки (высший приоритет)
+                                                    for (int i = 0; i < _completedRulerLines.length; i++) {
+                                                      if (_isPointOnRulerText(sceneOffset, i)) {
+                                                        print("=== POINTER DOWN: Найден текст линейки $i в точке $sceneOffset");
+                                                        setState(() {
+                                                          _selectedRulerIndex = i;
+                                                          _selectedAngleIndex = null;
+                                                          _selectedTextIndex = null;
+                                                          _selectedArrowIndex = null;
+                                                          _selectedAreaIndex = null;
+                                                          _isDraggingRulerText = true;
+                                                          _dragOffset = sceneOffset;
+                                                          _hasMeasurementNearPointer = true;
+                                                          _isDragging = true;
+                                                        });
+                                                        return;
+                                                      }
+                                                    }
+                                                    
+                                                    // Проверяем перетаскивание текста угла (высший приоритет)
+                                                    for (int i = 0; i < _completedAngles.length; i++) {
+                                                      if (_isPointOnAngleText(sceneOffset, i)) {
+                                                        print("=== POINTER DOWN: Найден текст угла $i в точке $sceneOffset");
+                                                        setState(() {
+                                                          _selectedAngleIndex = i;
+                                                          _selectedRulerIndex = null;
+                                                          _selectedTextIndex = null;
+                                                          _selectedArrowIndex = null;
+                                                          _selectedAreaIndex = null;
+                                                          _isDraggingAngleText = true;
+                                                          _dragOffset = sceneOffset;
+                                                          _hasMeasurementNearPointer = true;
+                                                          _isDragging = true;
+                                                        });
+                                                        return;
+                                                      }
+                                                    }
+                                                  }
+                                                  
                                                   // Проверяем наличие измерений рядом с указателем
                                                   final hasMeasurement = _checkMeasurementNearPointer(event.localPosition);
                                                   if (hasMeasurement != _hasMeasurementNearPointer) {
@@ -5629,11 +6106,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                       _areaDragOffsetRelative = null;
                                                     });
                                                   }
-                                                } else if (_isDraggingRuler || _isDraggingAngle || _isDraggingText || _isDraggingArrow || _isDraggingArea) {
+                                                } else if (_isDraggingRuler || _isDraggingAngle || _isDraggingRulerText || _isDraggingAngleText || _isDraggingText || _isDraggingArrow || _isDraggingArea) {
                                                   // Завершаем перетаскивание
                                                   setState(() {
                                                     _isDraggingRuler = false;
                                                     _isDraggingAngle = false;
+                                                    _isDraggingRulerText = false;
+                                                    _isDraggingAngleText = false;
                                                     _isDraggingText = false;
                                                     _isDraggingArrow = false;
                                                     _isDraggingArea = false;
@@ -5641,6 +6120,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                     _areaDragOffset = null;
                                                     _areaDragOffsetRelative = null;
                                                     _hasMeasurementNearPointer = false;
+                                                    _isDragging = false;
                                                   });
                                                 }
                                               },
@@ -5783,6 +6263,120 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                     });
                                                   }
                                                   
+                                                  // Обрабатываем перетаскивание текста линейки
+                                                  if (_isDraggingRulerText && 
+                                                      _selectedRulerIndex != null && 
+                                                      _selectedRulerIndex! >= 0 && 
+                                                      _selectedRulerIndex! < _completedRulerLines.length &&
+                                                      _dragOffset != null) {
+                                                    if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                      _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                      _matrixCacheValid = true;
+                                                    }
+                                                    final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                    final canvasSize = _getCanvasSize();
+                                                    final line = _completedRulerLines[_selectedRulerIndex!];
+                                                    
+                                                    // Если textPosition еще не установлен, устанавливаем его на текущую позицию курсора
+                                                    Offset currentTextPos;
+                                                    if (line.textPosition != null) {
+                                                      currentTextPos = line.textPosition!;
+                                                    } else {
+                                                      // При первом перетаскивании используем текущую позицию курсора как начальную
+                                                      currentTextPos = Offset(
+                                                        _dragOffset!.dx / canvasSize.width,
+                                                        _dragOffset!.dy / canvasSize.height,
+                                                      );
+                                                    }
+                                                    
+                                                    final deltaScene = sceneOffset - _dragOffset!;
+                                                    final deltaRelative = Offset(
+                                                      deltaScene.dx / canvasSize.width,
+                                                      deltaScene.dy / canvasSize.height,
+                                                    );
+                                                    
+                                                    setState(() {
+                                                      _completedRulerLines[_selectedRulerIndex!] = RulerLine(
+                                                        start: line.start,
+                                                        end: line.end,
+                                                        pixelSpacing: line.pixelSpacing,
+                                                        textPosition: Offset(
+                                                          currentTextPos.dx + deltaRelative.dx,
+                                                          currentTextPos.dy + deltaRelative.dy,
+                                                        ),
+                                                      );
+                                                      _dragOffset = sceneOffset;
+                                                    });
+                                                    return;
+                                                  }
+                                                  
+                                                  // Обрабатываем перетаскивание текста угла
+                                                  if (_isDraggingAngleText && 
+                                                      _selectedAngleIndex != null && 
+                                                      _selectedAngleIndex! >= 0 && 
+                                                      _selectedAngleIndex! < _completedAngles.length &&
+                                                      _dragOffset != null) {
+                                                    if (!_matrixCacheValid || _cachedInvertedMatrix == null) {
+                                                      _cachedInvertedMatrix = Matrix4.inverted(_transformationController.value);
+                                                      _matrixCacheValid = true;
+                                                    }
+                                                    final Offset sceneOffset = MatrixUtils.transformPoint(_cachedInvertedMatrix!, event.localPosition);
+                                                    final canvasSize = _getCanvasSize();
+                                                    final deltaScene = sceneOffset - _dragOffset!;
+                                                    final deltaRelative = Offset(
+                                                      deltaScene.dx / canvasSize.width,
+                                                      deltaScene.dy / canvasSize.height,
+                                                    );
+                                                    setState(() {
+                                                      final angle = _completedAngles[_selectedAngleIndex!];
+                                                      Offset currentTextPos;
+                                                      if (angle.textPosition != null) {
+                                                        currentTextPos = angle.textPosition!;
+                                                      } else {
+                                                        if (angle.type == AngleType.cobb) {
+                                                          final absPoint1 = angle.getAbsolutePoint1(canvasSize);
+                                                          final absLine1End = angle.getAbsoluteLine1End(canvasSize);
+                                                          final absPoint2 = angle.getAbsolutePoint2(canvasSize);
+                                                          final absLine2End = angle.getAbsoluteLine2End(canvasSize);
+                                                          if (absLine1End != null && absLine2End != null) {
+                                                            final midPoint = Offset(
+                                                              (absPoint1.dx + absLine1End.dx + absPoint2.dx + absLine2End.dx) / 4,
+                                                              (absPoint1.dy + absLine1End.dy + absPoint2.dy + absLine2End.dy) / 4,
+                                                            );
+                                                            final absTextPos = Offset(midPoint.dx + 20, midPoint.dy);
+                                                            currentTextPos = Offset(
+                                                              absTextPos.dx / canvasSize.width,
+                                                              absTextPos.dy / canvasSize.height,
+                                                            );
+                                                          } else {
+                                                            currentTextPos = Offset(0.5, 0.5);
+                                                          }
+                                                        } else {
+                                                          final absVertex = angle.getAbsoluteVertex(canvasSize);
+                                                          final absTextPos = Offset(absVertex.dx + 20, absVertex.dy);
+                                                          currentTextPos = Offset(
+                                                            absTextPos.dx / canvasSize.width,
+                                                            absTextPos.dy / canvasSize.height,
+                                                          );
+                                                        }
+                                                      }
+                                                      _completedAngles[_selectedAngleIndex!] = AngleMeasurement(
+                                                        vertex: angle.vertex,
+                                                        point1: angle.point1,
+                                                        point2: angle.point2,
+                                                        type: angle.type,
+                                                        line1End: angle.line1End,
+                                                        line2End: angle.line2End,
+                                                        textPosition: Offset(
+                                                          currentTextPos.dx + deltaRelative.dx,
+                                                          currentTextPos.dy + deltaRelative.dy,
+                                                        ),
+                                                      );
+                                                      _dragOffset = sceneOffset;
+                                                    });
+                                                    return;
+                                                  }
+                                                  
                                                   // Обрабатываем перетаскивание напрямую через Listener
                                                   if (_isDraggingRuler && 
                                                       _selectedRulerIndex != null && 
@@ -5806,6 +6400,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                         start: Offset(line.start.dx + deltaRelative.dx, line.start.dy + deltaRelative.dy),
                                                         end: Offset(line.end.dx + deltaRelative.dx, line.end.dy + deltaRelative.dy),
                                                         pixelSpacing: line.pixelSpacing,
+                                                        textPosition: line.textPosition, // Сохраняем позицию текста
                                                       );
                                                       _dragOffset = sceneOffset;
                                                     });
@@ -5840,6 +6435,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                           line2End: angle.line2End != null
                                                               ? Offset(angle.line2End!.dx + deltaRelative.dx, angle.line2End!.dy + deltaRelative.dy)
                                                               : null,
+                                                          textPosition: angle.textPosition, // Сохраняем позицию текста
                                                         );
                                                       } else {
                                                         // Для обычного угла перемещаем 3 точки
@@ -5848,6 +6444,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                           point1: Offset(angle.point1.dx + deltaRelative.dx, angle.point1.dy + deltaRelative.dy),
                                                           point2: Offset(angle.point2.dx + deltaRelative.dx, angle.point2.dy + deltaRelative.dy),
                                                           type: AngleType.normal,
+                                                          textPosition: angle.textPosition, // Сохраняем позицию текста
                                                         );
                                                       }
                                                       
@@ -5937,11 +6534,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               onPanUpdate: _handlePanUpdate,
                                               onPanEnd: _handlePanEnd,
                                               child: AbsorbPointer(
-                                                absorbing: _isDraggingRuler || _isDraggingAngle || _isDraggingText || _isDraggingArrow || _isDraggingArea,
+                                                absorbing: _isDraggingRuler || _isDraggingAngle || _isDraggingRulerText || _isDraggingAngleText || _isDraggingText || _isDraggingArrow || _isDraggingArea,
                                                 child: InteractiveViewer(
                                                   transformationController: _transformationController,
-                                                  panEnabled: (_currentTool == ToolMode.pan || (_currentTool == ToolMode.brightness && _isRightButtonPressed)) && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingText && !_isDraggingArrow && !_isDraggingArea && !_hasMeasurementNearPointer && _brightnessDragStart == null,
-                                                  scaleEnabled: (_currentTool == ToolMode.pan || _currentTool == ToolMode.brightness) && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingText && !_isDraggingArrow && !_isDraggingArea && !_hasMeasurementNearPointer && _brightnessDragStart == null,
+                                                  panEnabled: (_currentTool == ToolMode.pan || (_currentTool == ToolMode.brightness && _isRightButtonPressed)) && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingRulerText && !_isDraggingAngleText && !_isDraggingText && !_isDraggingArrow && !_isDraggingArea && !_hasMeasurementNearPointer && _brightnessDragStart == null,
+                                                  scaleEnabled: (_currentTool == ToolMode.pan || _currentTool == ToolMode.brightness) && !_isDraggingRuler && !_isDraggingAngle && !_isDraggingRulerText && !_isDraggingAngleText && !_isDraggingText && !_isDraggingArrow && !_isDraggingArea && !_hasMeasurementNearPointer && _brightnessDragStart == null,
                                                 minScale: 0.1, maxScale: 8.0,
                                                 child: RepaintBoundary(
                                                   key: _captureKey,
