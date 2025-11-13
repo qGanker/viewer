@@ -829,7 +829,6 @@ class RulerPainter extends CustomPainter {
           color: Colors.yellow,
           fontSize: 14,
           fontWeight: FontWeight.bold,
-          backgroundColor: Colors.black87
         )
       ),
       textDirection: TextDirection.ltr,
@@ -840,15 +839,6 @@ class RulerPainter extends CustomPainter {
       (start.dx + end.dx) / 2 + 15, 
       (start.dy + end.dy) / 2 - textPainter.height / 2
     );
-    
-    // Рисуем фон для текста
-    final bgRect = Rect.fromLTWH(
-      textOffset.dx - 5,
-      textOffset.dy - 2,
-      textPainter.width + 10,
-      textPainter.height + 4
-    );
-    canvas.drawRect(bgRect, Paint()..color = Colors.black87);
     
     textPainter.paint(canvas, textOffset);
     
@@ -1105,7 +1095,6 @@ class AnglePainter extends CustomPainter {
           color: Colors.cyan,
           fontSize: 14,
           fontWeight: FontWeight.bold,
-          backgroundColor: Colors.black87,
         ),
       ),
       textDirection: TextDirection.ltr,
@@ -1116,15 +1105,6 @@ class AnglePainter extends CustomPainter {
       vertex.dx + 20,
       vertex.dy - textPainter.height / 2,
     );
-    
-    // Рисуем фон для текста
-    final bgRect = Rect.fromLTWH(
-      textOffset.dx - 5,
-      textOffset.dy - 2,
-      textPainter.width + 10,
-      textPainter.height + 4,
-    );
-    canvas.drawRect(bgRect, Paint()..color = Colors.black87);
     
     textPainter.paint(canvas, textOffset);
     
@@ -1268,7 +1248,6 @@ class AnglePainter extends CustomPainter {
           color: Colors.cyan,
           fontSize: 14,
           fontWeight: FontWeight.bold,
-          backgroundColor: Colors.black87,
         ),
       ),
       textDirection: TextDirection.ltr,
@@ -1284,15 +1263,6 @@ class AnglePainter extends CustomPainter {
       midPoint.dx + 20,
       midPoint.dy - textPainter.height / 2,
     );
-    
-    // Рисуем фон для текста
-    final bgRect = Rect.fromLTWH(
-      textOffset.dx - 5,
-      textOffset.dy - 2,
-      textPainter.width + 10,
-      textPainter.height + 4,
-    );
-    canvas.drawRect(bgRect, Paint()..color = Colors.black87);
     
     textPainter.paint(canvas, textOffset);
     
